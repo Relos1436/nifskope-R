@@ -285,12 +285,44 @@ private:
 		Key_RotateXY = 22,
 		Key_RotateZ = 23,
 		Key_Scale = 24,
-		Key_TranslateXY = 25
+		Key_TranslateXY = 25,
+		// ACP collision nudge modifiers.  R, not C, carries the capsule radius.
+		Key_CapsuleRadius = 26,
+		Key_AxisX = 27,
+		Key_AxisY = 28,
+		Key_AxisZ = 29,
+		// Size keys.  L and W are resolved in eventFilter(), NOT
+		// convertKeyCode(): bare L is the Left View menu shortcut and W is
+		// camera-forward, and both must keep working when no shape is selected.
+		Key_DimW = 30,		//!< width  -> bhkBoxShape Dimensions X
+		Key_DimL = 31,		//!< length -> bhkBoxShape Dimensions Y, or capsule end-to-end
+		Key_DimH = 32		//!< height -> bhkBoxShape Dimensions Z
 	};
 
 	int convertKeyCode( int n ) const;
 	inline bool kbd( int n ) const;
 	void transformItem( float dx, float dy );
+
+	// ACP collision nudge: hold C / X / Y / Z and use the arrow keys to edit
+	// the selected Havok collision block.  One tap = NUDGE_STEP on the raw
+	// field value; holding ramps up.
+	static constexpr float NUDGE_STEP = 0.0001f;
+	//! Shift + axis rotates instead of translating; one tap is this many DEGREES.
+	static constexpr float NUDGE_ROT_STEP = 0.01f;
+	int nudgeDir = 0;
+	//! Ctrl is held.  Read from events, not kbdState: nudgeTick() runs on
+	//! frames and has no event to ask.  Ctrl+L grows a capsule's Second Point
+	//! end, as Shift+L grows its First Point end.
+	bool nudgeCtrl = false;			//!< +1, -1 or 0: arrow direction last frame
+	float nudgeHeld = 0.0f;		//!< seconds the arrow has been held down
+	float nudgeAccum = 0.0f;	//!< fractional steps carried between frames
+	bool nudgeWouldClaim( int k ) const;	//!< would modifier `k` act on the current block?
+	bool nudgeActive() const;				//!< a nudge modifier is held and the block can take it
+	bool nudgeApply( int steps );			//!< write `steps` * NUDGE_STEP into the block
+	bool nudgeTick( float dT );				//!< per-frame ramp; true if the arrows are consumed
+	//! Claims the nudge keys application-wide, so they work while the Block
+	//! List has focus instead of moving its selection.
+	bool eventFilter( QObject * o, QEvent * e ) override;
 
 public:
 	struct Settings

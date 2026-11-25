@@ -57,8 +57,12 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QKeyEvent>
 #include <QLabel>
 #include <QMenu>
+#include <QAbstractSpinBox>
+#include <QLineEdit>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QPlainTextEdit>
+#include <QTextEdit>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSettings>
@@ -191,6 +195,12 @@ QWidget * GLView::createWindowContainer( QWidget * parent )
 
 	graphicsView->installEventFilter( parent );
 	installEventFilter( graphicsView );
+
+	// ACP: watch keys application-wide.  The collision nudge has to work while
+	// the Block List has focus, and that is the normal case -- you select the
+	// block there, and the tree would otherwise eat the arrow keys to move its
+	// own selection.
+	qApp->installEventFilter( this );
 
 	return graphicsView;
 }
@@ -1388,6 +1398,9 @@ void GLView::advanceGears()
 	}
 
 	float	rotateStep = cfg.rotSpd * dT;
+	// ACP: run the collision nudge ramp on the UNSCALED frame time, before
+	// dT is rescaled for Starfield below.
+	bool	nudging = nudgeTick( dT );
 	// Fix movement speed for Starfield scale
 	dT *= scale();
 	float	moveStep = cfg.moveSpd * dT;
@@ -1396,7 +1409,9 @@ void GLView::advanceGears()
 	// keys based on user preferences of what app they would like to
 	// emulate for the control scheme
 	// Rotation
-	if ( kbd( Key_Shift ) && !frontalLight ) {
+	if ( nudging ) {
+		// ACP: the arrow keys are editing a collision block, not the camera.
+	} else if ( kbd( Key_Shift ) && !frontalLight ) {
 		if ( kbd( Key_RotateUp ) )    rotateLight( -rotateStep, 0.0f );
 		if ( kbd( Key_RotateDown ) )  rotateLight( rotateStep, 0.0f );
 		if ( kbd( Key_RotateLeft ) )  rotateLight( 0.0f, -rotateStep );
@@ -1876,6 +1891,15 @@ int GLView::convertKeyCode( int n ) const
 		return Key_Scale;
 	case Qt::Key_O:
 		return Key_TranslateXY;
+	// ACP collision nudge modifiers
+	case Qt::Key_R:
+		return Key_CapsuleRadius;
+	case Qt::Key_X:
+		return Key_AxisX;
+	case Qt::Key_Y:
+		return Key_AxisY;
+	case Qt::Key_Z:
+		return Key_AxisZ;
 	}
 	return -1;
 }
@@ -1883,8 +1907,27 @@ int GLView::convertKeyCode( int n ) const
 void GLView::keyPressEvent( QKeyEvent * event )
 {
 	int	k = convertKeyCode( event->key() );
+	// ACP: C / X / Y / Z are only nudge modifiers on their own.  With Ctrl or
+	// Alt held they belong to the menu shortcuts (Ctrl+C, Ctrl+Z, ...), so
+	// leave them alone.
+	if ( ( k == Key_CapsuleRadius || k == Key_AxisX || k == Key_AxisY || k == Key_AxisZ )
+	     && ( event->modifiers() & ( Qt::ControlModifier | Qt::AltModifier ) ) ) {
+		event->ignore();
+		return;
+	}
 	if ( k >= 0 ) {
 		kbdState = kbdState | ( 1ULL << k );
+		// ACP: an arrow TAP is exactly one step.  The per-frame ramp in
+		// updateAnimationTime() only takes over once the key is held.
+		if ( !event->isAutoRepeat()
+		     && ( k == Key_RotateUp || k == Key_RotateDown
+		          || k == Key_RotateLeft || k == Key_RotateRight )
+		     && nudgeActive() ) {
+			nudgeDir = ( k == Key_RotateUp || k == Key_RotateRight ? 1 : -1 );
+			nudgeHeld = 0.0f;
+			nudgeAccum = 0.0f;
+			nudgeApply( nudgeDir );
+		}
 		if ( k != Key_Shift )
 			return;
 	} else {
@@ -1930,6 +1973,12 @@ void GLView::keyPressEvent( QKeyEvent * event )
 void GLView::keyReleaseEvent( QKeyEvent * event )
 {
 	int	k = convertKeyCode( event->key() );
+	// ACP: some platforms emit release/press pairs while a key auto-repeats.
+	// Clearing the bit there would restart the nudge ramp on every repeat.
+	if ( event->isAutoRepeat() && nudgeDir != 0 && k >= 0 ) {
+		event->ignore();
+		return;
+	}
 	if ( k >= 0 ) {
 		kbdState = kbdState & ~( 1ULL << k );
 		if ( k != Key_Shift )
@@ -2075,6 +2124,456 @@ void GLView::wheelEvent( QWheelEvent * event )
 		else
 			setDistance( Dist * Settings::zoomInScale );
 	}
+}
+
+// ---------------------------------------------------------------------------
+// ACP collision nudge
+//
+// Hold C, X, Y or Z and press an arrow key to edit the Havok collision block
+// selected in the Block List.  One tap moves the RAW FIELD VALUE -- the number
+// shown in Block Details, in Havok units, not world units -- by NUDGE_STEP.
+// Holding the arrow ramps the rate up so coarse moves are still quick.
+//
+//   C        bhkCapsuleShape          radius (writes Radius, Radius 1, Radius 2)
+//   X/Y/Z    bhkConvexTransformShape  Transform translation on that axis
+//   X/Y/Z    bhkCapsuleShape          First Point and Second Point together
+//   X/Y/Z    bhkRigidBodyT and co.    Translation on that axis
+//
+// Up / Right increase, Down / Left decrease.  There is no undo, exactly as
+// with the existing mouse-drag transform -- work on copies.
+// ---------------------------------------------------------------------------
+
+// ACP: the nudge keys are claimed application-wide, not just in the viewport.
+// Selecting a collision block puts focus on the Block List, so without this the
+// arrows would move the tree selection and C/X/Y/Z would trigger its
+// type-ahead search -- which would change the selected block out from under
+// the edit.
+bool GLView::eventFilter( QObject * o, QEvent * e )
+{
+	QEvent::Type	t = e->type();
+
+	// Never leave a modifier stuck down because the app lost focus mid-hold.
+	if ( t == QEvent::ApplicationDeactivate || t == QEvent::WindowDeactivate ) {
+		kbdState = kbdState & ~( ( 1ULL << Key_CapsuleRadius ) | ( 1ULL << Key_AxisX )
+		                         | ( 1ULL << Key_AxisY ) | ( 1ULL << Key_AxisZ )
+		                         | ( 1ULL << Key_DimW ) | ( 1ULL << Key_DimL )
+		                         | ( 1ULL << Key_DimH ) );
+		nudgeDir = 0;
+		nudgeCtrl = false;
+		return QOpenGLWindow::eventFilter( o, e );
+	}
+
+	if ( t != QEvent::KeyPress && t != QEvent::KeyRelease && t != QEvent::ShortcutOverride )
+		return QOpenGLWindow::eventFilter( o, e );
+
+	// Only this view's own window.
+	QWidget *	fw = QApplication::focusWidget();
+	if ( !( fw && graphicsView && fw->window() == graphicsView->window() ) )
+		return QOpenGLWindow::eventFilter( o, e );
+
+	// Never take keys away from somewhere text is being typed.
+	if ( qobject_cast< QLineEdit * >( fw ) || qobject_cast< QAbstractSpinBox * >( fw )
+	     || qobject_cast< QTextEdit * >( fw ) || qobject_cast< QPlainTextEdit * >( fw ) )
+		return QOpenGLWindow::eventFilter( o, e );
+
+	QKeyEvent *	ke = static_cast< QKeyEvent * >( e );
+
+	// Track Ctrl before any early return, so releasing it is never missed and
+	// cannot leave a stale "Ctrl held" behind while L is still down.  On the
+	// release of Ctrl itself, modifiers() no longer reports it, hence the
+	// explicit key test.
+	if ( ke->key() == Qt::Key_Control )
+		nudgeCtrl = ( t == QEvent::KeyPress );
+	else if ( t != QEvent::ShortcutOverride )
+		nudgeCtrl = bool( ke->modifiers() & Qt::ControlModifier );
+
+	if ( ke->modifiers() & Qt::AltModifier )
+		return QOpenGLWindow::eventFilter( o, e );
+
+	// Ctrl means a menu command, so it is passed straight through -- with one
+	// exception: Ctrl+L and Ctrl+arrow while a bhkCapsuleShape is selected,
+	// which grow its Second Point end.  Nothing is shadowed; Ctrl+L is unused
+	// in NifSkope, whose only Ctrl bindings are Ctrl+F9, Ctrl+Alt+S and the
+	// standard Undo/Redo/Save/New/Copy/Paste.  The exception is deliberately
+	// NOT extended to a box: Ctrl+L there would silently act like plain L.
+	if ( ke->modifiers() & Qt::ControlModifier ) {
+		bool	capsule = ( scene->nifModel && scene->currentBlock.isValid()
+		                    && scene->nifModel->blockInherits( scene->currentBlock,
+		                                                       "bhkCapsuleShape" ) );
+		bool	isL = ( ke->key() == Qt::Key_L );
+		bool	isArrow = ( ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down
+		                    || ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Right );
+		if ( !( capsule && ( isL || ( isArrow && nudgeActive() ) ) ) )
+			return QOpenGLWindow::eventFilter( o, e );
+	}
+
+	int	k = convertKeyCode( ke->key() );
+	// L / W / H are resolved here, not in convertKeyCode(), because both
+	// already mean something else: bare L is the "Left View" menu shortcut and
+	// W is camera-forward.  They are only taken over while a bhkBoxShape is
+	// selected (L also while a bhkCapsuleShape is, for its length); the rest of
+	// the time they do their usual job.
+	switch ( ke->key() ) {
+	case Qt::Key_W:
+		k = Key_DimW;
+		break;
+	case Qt::Key_L:
+		k = Key_DimL;
+		break;
+	case Qt::Key_H:
+		k = Key_DimH;
+		break;
+	default:
+		break;
+	}
+
+	// A bare menu shortcut is consulted BEFORE the key event is delivered -- a
+	// QShortcutOverride accepted here cancels it for this press, so the key
+	// arrives as an ordinary KeyPress instead.  This is what lets L serve both
+	// purposes; the Z key was handled earlier by deleting its shortcut outright.
+	if ( t == QEvent::ShortcutOverride ) {
+		if ( ( k == Key_DimW || k == Key_DimL || k == Key_DimH ) && nudgeWouldClaim( k ) ) {
+			e->accept();
+			return true;
+		}
+		return QOpenGLWindow::eventFilter( o, e );
+	}
+
+	bool	press = ( t == QEvent::KeyPress );
+
+	// R / X / Y / Z: tracked wherever focus is, and swallowed -- but only once
+	// a block the nudge can actually edit is selected, so type-ahead search in
+	// the Block List still works the rest of the time.
+	if ( k == Key_CapsuleRadius || k == Key_AxisX || k == Key_AxisY || k == Key_AxisZ
+	     || k == Key_DimW || k == Key_DimL || k == Key_DimH ) {
+		if ( press ) {
+			if ( !nudgeWouldClaim( k ) )
+				return QOpenGLWindow::eventFilter( o, e );
+			kbdState = kbdState | ( 1ULL << k );
+			if ( !nudgeActive() ) {
+				kbdState = kbdState & ~( 1ULL << k );
+				return QOpenGLWindow::eventFilter( o, e );
+			}
+		} else {
+			bool	wasHeld = bool( ( kbdState >> k ) & 1 );
+			kbdState = kbdState & ~( 1ULL << k );
+			if ( !wasHeld )
+				return QOpenGLWindow::eventFilter( o, e );
+		}
+		return true;
+	}
+
+	// Shift is tracked but passed on -- the Block List needs it for range
+	// selection, and the viewport for the light.
+	if ( k == Key_Shift ) {
+		if ( press )
+			kbdState = kbdState | ( 1ULL << k );
+		else
+			kbdState = kbdState & ~( 1ULL << k );
+		return QOpenGLWindow::eventFilter( o, e );
+	}
+
+	if ( !( k == Key_RotateUp || k == Key_RotateDown
+	        || k == Key_RotateLeft || k == Key_RotateRight ) )
+		return QOpenGLWindow::eventFilter( o, e );
+	if ( !nudgeActive() )
+		return QOpenGLWindow::eventFilter( o, e );
+
+	// The arrow belongs to the nudge now, whichever widget has focus.
+	if ( press ) {
+		kbdState = kbdState | ( 1ULL << k );
+		if ( !ke->isAutoRepeat() ) {
+			nudgeDir = ( k == Key_RotateUp || k == Key_RotateRight ? 1 : -1 );
+			nudgeHeld = 0.0f;
+			nudgeAccum = 0.0f;
+			nudgeApply( nudgeDir );
+		}
+	} else if ( !ke->isAutoRepeat() ) {
+		kbdState = kbdState & ~( 1ULL << k );
+	}
+	return true;
+}
+
+bool GLView::nudgeWouldClaim( int k ) const
+{
+	if ( !( scene->nifModel && scene->currentBlock.isValid() ) )
+		return false;
+	const NifModel *	nif = scene->nifModel;
+	const QModelIndex &	iBlock = scene->currentBlock;
+	switch ( k ) {
+	case Key_CapsuleRadius:
+		return nif->blockInherits( iBlock, "bhkCapsuleShape" );
+	case Key_DimL:
+		// L is length: a box half-extent, or a capsule's end-to-end distance.
+		return nif->blockInherits( iBlock, { "bhkBoxShape", "bhkCapsuleShape" } );
+	case Key_DimW:
+	case Key_DimH:
+		return nif->blockInherits( iBlock, "bhkBoxShape" );
+	case Key_AxisX:
+	case Key_AxisY:
+	case Key_AxisZ:
+		if ( nif->blockInherits( iBlock, { "bhkConvexTransformShape", "bhkTransformShape", "bhkCapsuleShape" } ) )
+			return true;
+		// Shift + axis rotates: a rigid body carries a Rotation, not a Translation.
+		return nif->getIndex( iBlock, ( kbd( Key_Shift ) ? "Rotation" : "Translation" ) ).isValid();
+	}
+	return false;
+}
+
+bool GLView::nudgeActive() const
+{
+	static const int	modifiers[7] = {
+		Key_CapsuleRadius, Key_AxisX, Key_AxisY, Key_AxisZ, Key_DimW, Key_DimL, Key_DimH
+	};
+	for ( int i = 0; i < 7; i++ ) {
+		if ( kbd( modifiers[i] ) && nudgeWouldClaim( modifiers[i] ) )
+			return true;
+	}
+	return false;
+}
+
+bool GLView::nudgeApply( int steps )
+{
+	if ( steps == 0 )
+		return false;
+	if ( !( scene->nifModel && scene->currentBlock.isValid() ) )
+		return false;
+	NifModel *	nif = const_cast< NifModel * >( scene->nifModel );
+	QModelIndex	iBlock = scene->currentBlock;
+	float	d = float( steps ) * NUDGE_STEP;
+
+	// R: capsule radius.  A capsule stores it three times and all three must
+	// agree, or the shape renders and collides inconsistently.
+	if ( kbd( Key_CapsuleRadius ) && nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+		QModelIndex	iR = nif->getIndex( iBlock, "Radius" );
+		if ( !iR.isValid() )
+			return false;
+		float	r = nif->get<float>( iR ) + d;
+		if ( r < NUDGE_STEP )
+			r = NUDGE_STEP;		// never let a radius reach zero or go negative
+		static const char * const	radiusFields[3] = { "Radius", "Radius 1", "Radius 2" };
+		for ( int j = 0; j < 3; j++ ) {
+			if ( QModelIndex i = nif->getIndex( iBlock, radiusFields[j] ); i.isValid() )
+				nif->set<float>( i, r );
+		}
+		return true;
+	}
+
+	// L on a capsule: LENGTH.  A capsule stores no length -- it is the distance
+	// between the two end points -- so the points slide along the capsule's OWN
+	// axis, never a world axis, which is what keeps a tilted capsule tilted.
+	//
+	//   L           both ends, symmetrically about the midpoint: NUDGE_STEP at
+	//               each end, twice that overall, exactly as the box behaves
+	//   Shift + L   the First Point end only
+	//   Ctrl  + L   the Second Point end only
+	if ( kbd( Key_DimL ) && nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+		QModelIndex	i1 = nif->getIndex( iBlock, "First Point" );
+		QModelIndex	i2 = nif->getIndex( iBlock, "Second Point" );
+		if ( !( i1.isValid() && i2.isValid() ) )
+			return false;
+		Vector3	p1 = nif->get<Vector3>( i1 );
+		Vector3	p2 = nif->get<Vector3>( i2 );
+		Vector3	ax = p2 - p1;
+		float	len = ax.length();
+		if ( len < 1.0e-6f )
+			return false;		// degenerate: no axis to grow along
+		ax = ax / len;
+
+		// Shift+L moves ONLY the First Point end, Ctrl+L ONLY the Second Point
+		// end; plain L moves both.  Holding both is ambiguous, so it does
+		// nothing rather than pick one.  With one end pinned the length changes
+		// by d, not 2d, and the capsule's midpoint shifts by d/2 -- unavoidable,
+		// and the reason plain L exists alongside these.
+		//
+		// The moved end is written from the PINNED end plus the new length, not
+		// by adding d to its own position, so the pinned end stays bit-exact
+		// and the length is exact no matter how many taps it took to get there.
+		bool	only1 = kbd( Key_Shift );
+		bool	only2 = nudgeCtrl;
+		if ( only1 && only2 )
+			return false;
+		if ( only1 || only2 ) {
+			float	n = len + d;
+			if ( n < NUDGE_STEP )
+				n = NUDGE_STEP;		// never let the ends cross over
+			if ( only1 )
+				nif->set<Vector3>( i1, p2 - ax * n );
+			else
+				nif->set<Vector3>( i2, p1 + ax * n );
+			return true;
+		}
+
+		float	h = len * 0.5f + d;
+		if ( h < NUDGE_STEP )
+			h = NUDGE_STEP;		// never let the two end points cross over
+		Vector3	mid = ( p1 + p2 ) / 2.0f;
+		nif->set<Vector3>( i1, mid - ax * h );
+		nif->set<Vector3>( i2, mid + ax * h );
+		return true;
+	}
+
+	// L / W / H: bhkBoxShape `Dimensions`.  These are HALF-extents, so one tap
+	// grows the box by NUDGE_STEP on each side -- twice that overall -- and it
+	// grows symmetrically about its own centre, since a box has no position of
+	// its own (its placement lives in the parent bhkConvexTransformShape).
+	if ( kbd( Key_DimW ) || kbd( Key_DimL ) || kbd( Key_DimH ) ) {
+		if ( !nif->blockInherits( iBlock, "bhkBoxShape" ) )
+			return false;
+		QModelIndex	i = nif->getIndex( iBlock, "Dimensions" );
+		if ( !i.isValid() )
+			return false;
+		unsigned int	c = ( kbd( Key_DimW ) ? 0u : ( kbd( Key_DimL ) ? 1u : 2u ) );
+		Vector3	v = nif->get<Vector3>( i );
+		float	n = v[c] + d;
+		if ( n < NUDGE_STEP )
+			n = NUDGE_STEP;		// a half-extent must never reach zero
+		v[c] = n;
+		nif->set<Vector3>( i, v );
+		return true;
+	}
+
+	int	axis = ( kbd( Key_AxisX ) ? 0 : ( kbd( Key_AxisY ) ? 1 : ( kbd( Key_AxisZ ) ? 2 : -1 ) ) );
+	if ( axis < 0 )
+		return false;
+
+	// -------------------------------------------------------------------
+	// Shift + X/Y/Z: ROTATE about that axis, through the shape's own origin.
+	//
+	// The delta is built with fromEuler(), which for a single non-zero angle
+	// is exactly a rotation about that one axis -- no Euler ambiguity.  It is
+	// then MULTIPLIED into the stored rotation.  Decomposing the stored
+	// rotation to Euler, changing one angle and recomposing would drift and
+	// would break at gimbal lock; this cannot.
+	//
+	// Note `Matrix` is row-major m[row][col] while `Matrix4` is column-major
+	// m[col][row].  Mixing them up silently transposes the rotation.
+	// -------------------------------------------------------------------
+	if ( kbd( Key_Shift ) ) {
+		float	ang = float( steps ) * NUDGE_ROT_STEP * float( 3.14159265358979324 / 180.0 );
+		Matrix	rd;
+		rd.fromEuler( ( axis == 0 ? ang : 0.0f ), ( axis == 1 ? ang : 0.0f ), ( axis == 2 ? ang : 0.0f ) );
+
+		if ( nif->blockInherits( iBlock, { "bhkConvexTransformShape", "bhkTransformShape" } ) ) {
+			QModelIndex	i = nif->getIndex( iBlock, "Transform" );
+			if ( !i.isValid() )
+				return false;
+			Matrix4	m = nif->get<Matrix4>( i );
+			// Rotate the three basis columns, leave column 3 (the translation)
+			// alone, so the shape spins in place instead of orbiting.
+			for ( unsigned int c = 0; c < 3; c++ ) {
+				float	v0 = m( c, 0 ), v1 = m( c, 1 ), v2 = m( c, 2 );
+				for ( unsigned int r = 0; r < 3; r++ )
+					m( c, r ) = rd( r, 0 ) * v0 + rd( r, 1 ) * v1 + rd( r, 2 ) * v2;
+			}
+			nif->set<Matrix4>( i, m );
+			return true;
+		}
+
+		// A capsule has no rotation of its own -- swing both end points about
+		// their midpoint, which is the same thing.
+		if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+			QModelIndex	i1 = nif->getIndex( iBlock, "First Point" );
+			QModelIndex	i2 = nif->getIndex( iBlock, "Second Point" );
+			if ( !( i1.isValid() && i2.isValid() ) )
+				return false;
+			Vector3	p1 = nif->get<Vector3>( i1 );
+			Vector3	p2 = nif->get<Vector3>( i2 );
+			Vector3	mid = ( p1 + p2 ) / 2.0f;
+			nif->set<Vector3>( i1, mid + ( rd * ( p1 - mid ) ) );
+			nif->set<Vector3>( i2, mid + ( rd * ( p2 - mid ) ) );
+			return true;
+		}
+
+		// bhkRigidBodyT stores an hkQuaternion.
+		if ( QModelIndex i = nif->getIndex( iBlock, "Rotation" ); i.isValid() ) {
+			Matrix	m;
+			m.fromQuat( nif->get<Quat>( i ) );
+			m = rd * m;
+			nif->set<Quat>( i, m.toQuat() );
+			return true;
+		}
+		return false;
+	}
+
+	// A Matrix44 is stored OpenGL column-major, so the translation is the
+	// fourth column: m[3][0..2].
+	if ( nif->blockInherits( iBlock, { "bhkConvexTransformShape", "bhkTransformShape" } ) ) {
+		if ( QModelIndex i = nif->getIndex( iBlock, "Transform" ); i.isValid() ) {
+			Matrix4	m = nif->get<Matrix4>( i );
+			m( 3, (unsigned int) axis ) = m( 3, (unsigned int) axis ) + d;
+			nif->set<Matrix4>( i, m );
+			return true;
+		}
+		return false;
+	}
+
+	// A capsule has no transform of its own; both end points move together.
+	if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+		bool	ok = false;
+		static const char * const	pointFields[2] = { "First Point", "Second Point" };
+		for ( int j = 0; j < 2; j++ ) {
+			if ( QModelIndex i = nif->getIndex( iBlock, pointFields[j] ); i.isValid() ) {
+				Vector3	v = nif->get<Vector3>( i );
+				v[(unsigned int) axis] = v[(unsigned int) axis] + d;
+				nif->set<Vector3>( i, v );
+				ok = true;
+			}
+		}
+		return ok;
+	}
+
+	// bhkRigidBodyT and anything else carrying a plain Translation.
+	if ( QModelIndex i = nif->getIndex( iBlock, "Translation" ); i.isValid() ) {
+		Vector3	v = nif->get<Vector3>( i );
+		v[(unsigned int) axis] = v[(unsigned int) axis] + d;
+		nif->set<Vector3>( i, v );
+		return true;
+	}
+	return false;
+}
+
+bool GLView::nudgeTick( float dT )
+{
+	int	dir = 0;
+	if ( kbd( Key_RotateUp ) || kbd( Key_RotateRight ) )
+		dir += 1;
+	if ( kbd( Key_RotateDown ) || kbd( Key_RotateLeft ) )
+		dir -= 1;
+
+	if ( dir == 0 || !nudgeActive() ) {
+		nudgeDir = 0;
+		nudgeHeld = 0.0f;
+		nudgeAccum = 0.0f;
+		return false;
+	}
+
+	if ( dir != nudgeDir ) {
+		// Direction changed without the key going up -- restart the ramp.
+		nudgeDir = dir;
+		nudgeHeld = 0.0f;
+		nudgeAccum = 0.0f;
+		return true;
+	}
+
+	nudgeHeld += dT;
+	// The tap itself was applied in keyPressEvent.  Hold past the delay and
+	// the rate starts at 30 steps/s and doubles every 0.6 s, capped at 1500.
+	static const float	holdDelay = 0.35f;
+	if ( nudgeHeld <= holdDelay )
+		return true;
+
+	float	rate = 30.0f * std::exp2( ( nudgeHeld - holdDelay ) / 0.6f );
+	if ( rate > 1500.0f )
+		rate = 1500.0f;
+
+	nudgeAccum += rate * dT;
+	int	n = int( nudgeAccum );
+	if ( n > 0 ) {
+		nudgeAccum -= float( n );
+		nudgeApply( n * dir );
+	}
+	return true;
 }
 
 void GLView::transformItem( float dx, float dy )

@@ -8,7 +8,7 @@
 	TEMPLATE = app
 }
 
-TARGET   = NifSkope
+TARGET   = NifSkopeR
 
 macx: {
 	QMAKE_CC = clang
