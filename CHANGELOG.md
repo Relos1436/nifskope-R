@@ -15,6 +15,11 @@ Changes in this fork only. Everything below this section is upstream's changelog
 * The keys are claimed application-wide through an event filter, so they work whether focus is on the Block List, Block Details or the viewport, and the Block List's type-ahead search can no longer change the selected block during an edit.
 * **Bare Z no longer triggers View → Center Viewport.** The shortcut was removed because it shadowed the Z axis key; the menu item still works. L (Left View) and W (camera forward) are *not* removed — they are taken over only while a collision block they can edit is selected, and behave normally otherwise.
 * The build target is now `NifSkopeR`, and the window title reads `NifSkope R` followed by a build marker naming the feature set, so a fork build can be told from a stock one on sight. `setApplicationName` is unchanged, so existing settings are not orphaned.
+* Three new operations for headless (`--no-gui`) mode, which runs an edit against a file or a folder with no window open and is what makes NIF edits scriptable — and therefore something an AI assistant can carry out on a whole folder of meshes:
+  * **`--SetEffectShaderEmission <path>`** — follows a named block's `Shader Property` link, requires a `BSEffectShaderProperty`, and zeroes its `Base Color` RGB and `Base Color Scale`, keeping the colour alpha and the rest of the shader data.
+  * **`--RemoveBranch <path>`** — removes a named block and its descendants, then runs NifSkope's block reordering before saving. Skips missing or duplicate names, non-removable blocks, and branches with shared descendants.
+  * **`--BlockName <name>`** — names the target block for both of the above. Exact and case-sensitive; a near-miss matches nothing rather than erroring.
+  * Both operations take a NIF path or a folder processed recursively, and **overwrite input files in place**. The motivating case was stripping ENB particle-light nodes and their emission from Skyrim meshes. Written by Codex (OpenAI).
 
 See [ACP-CHANGES.md](ACP-CHANGES.md) for the reasoning, the implementation traps and the build notes.
 

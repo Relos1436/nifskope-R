@@ -2,19 +2,28 @@
 
 > ### ⚙ NifSkope R — a fork tailored to collision work
 >
-> This build exists for one job: **editing Havok collision shapes.** Capsules, boxes and transform shapes can be resized, moved and rotated directly from the keyboard, in exact repeatable steps, which stock NifSkope cannot do at all. Everything else is upstream NifSkope, untouched.
+> This build adds two things stock NifSkope cannot do:
 >
-> **[⬇ Download a build](https://github.com/Relos1436/nifskope-R/releases/latest)** · **[→ Collision controls and what changed](#nifskope-r--keyboard-editing-of-havok-collision)**
+> 1. **Editing Havok collision shapes from the keyboard.** Capsules, boxes and transform shapes resized, moved and rotated in exact repeatable steps.
+> 2. **Headless NIF commands** for zeroing an effect shader's emission and removing a named branch — editing meshes with no window open, which is what lets an AI assistant do it for you.
+>
+> Everything else is upstream NifSkope, untouched.
+>
+> **[⬇ Download a build](https://github.com/Relos1436/nifskope-R/releases/latest)** · **[→ What this fork adds](#nifskope-r--collision-editing-and-headless-nif-commands)**
 
 NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF is used by video games such as Morrowind, Oblivion, Skyrim, Fallout 3/NV/4/76, Starfield, Civilization IV, and more.
 
 ---
 
-## NifSkope R — keyboard editing of Havok collision
+## NifSkope R — collision editing and headless NIF commands
 
-**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`. It adds one feature: Havok collision shapes can be edited from the keyboard, in small exact steps.** Everything else below this section is upstream's own README, unchanged.
+**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
 
-The work is on the branch [`acp-collision-nudge`](https://github.com/Relos1436/nifskope-R/tree/acp-collision-nudge). `develop` is kept matching upstream so their changes merge cleanly.
+Branches:
+
+* [`acp-collision-nudge`](https://github.com/Relos1436/nifskope-R/tree/acp-collision-nudge) — the default. Collision editing, with the headless commands merged in, so one build has both.
+* [`cli-headless-ops`](https://github.com/Relos1436/nifskope-R/tree/cli-headless-ops) — the headless commands alone, branched off `develop`.
+* `develop` — kept matching upstream so their changes merge cleanly.
 
 ### Download
 
@@ -46,13 +55,45 @@ Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so 
 
 The step applies to the **raw field value as shown in Block Details**, not to world units — those fields are Havok units, 1/69.99125 of world scale. Editing the displayed number directly means there is no conversion to get wrong.
 
+### Headless mode — editing NIFs with no window open
+
+Normally NifSkope is something you click in: open a mesh, find a block, change fields, save. **Headless mode** runs the same program with `--no-gui` plus a command, so it opens the file, applies one operation, saves it and exits. Nothing appears on screen.
+
+Upstream added headless mode in June 2026 and it is still unreleased — it exists only in `develop` builds, which is why the tagged NifSkope releases ignore `--no-gui` entirely.
+
+**Why it matters: it turns a mesh edit into something you can type.** And anything you can type, an AI assistant can run for you. Instead of opening forty meshes and repeating the same fiddly block edit in each, you describe what you want — *"strip the ENB particle lights out of these meshes"* — and the assistant runs one command against the folder. The work that made this fork worth building is exactly that shape: hundreds of weapon meshes, the same small edit in each.
+
+This fork adds three operations to the fourteen upstream already has:
+
+```
+--SetEffectShaderEmission <path>   zero a BSEffectShaderProperty's Base Color
+                                   RGB and Base Color Scale, keeping the colour
+                                   alpha and the rest of the shader data
+--RemoveBranch <path>              remove a named block and its descendants,
+                                   then reorder blocks before saving
+--BlockName <name>                 names the target block for both of the
+                                   above; exact, case-sensitive
+```
+
+```powershell
+NifSkopeR.exe --no-gui --RemoveBranch "C:\meshes" --BlockName "EnbParticleLight01"
+```
+
+Upstream's own fourteen cover bounds, tangent spaces, index optimisation, duplicate and unused vertex removal, unused strings, bogus nodes, property merging, block reordering, sanitising before save, and three Starfield geometry conversions. `--help` lists them all.
+
+**Three things to know before pointing an assistant at your meshes:**
+
+* **Every operation overwrites the input file in place**, and a folder argument is processed **recursively**. There is no dry run and no backup. Work on copies.
+* **`--BlockName` is exact and case-sensitive.** A near-miss silently matches nothing rather than erroring.
+* **The exe is GUI-subsystem**, so it cannot write to the console that launched it. Run it directly and `--no-gui` appears to do nothing at all. Redirect its output to a file, or use a small wrapper script that does.
+
 ### What changed in the source
 
 | file | change |
 |---|---|
 | `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
 | `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration |
-| `src/main.cpp` | window title: `NifSkope R` plus a build marker |
+| `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
 | `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 

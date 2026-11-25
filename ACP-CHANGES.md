@@ -3,11 +3,15 @@
 A fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched
 from `develop` at `3797c89` (build of Nov 16 2026).
 
-It adds one thing: **Havok collision shapes can be edited from the keyboard**,
-in small exact steps, without leaving NifSkope.
+It adds two things:
+
+1. **Havok collision shapes can be edited from the keyboard**, in small exact
+   steps, without leaving NifSkope.
+2. **Three headless command-line operations**, for editing meshes with no
+   window open.
 
 Nothing else is changed. No upstream behaviour is removed except one menu
-shortcut, noted below. `README.md` is deliberately untouched.
+shortcut, noted below.
 
 ## Why
 
@@ -96,6 +100,56 @@ get wrong: what you see change is exactly what the key moved.
 Every edit clamps, so a radius, half-extent or length can never reach zero or
 invert.
 
+## Headless mode and the three CLI operations
+
+Normally NifSkope is a window you click in. **Headless mode** — `--no-gui` plus
+a command — runs the same program with no window: it opens the file, applies
+one operation, saves and exits. Upstream added it in June 2026 and it is still
+unreleased, present only in `develop` builds, which is why tagged NifSkope
+releases ignore the flag.
+
+What it buys you is that a mesh edit becomes something you can *type*, and so
+something that can be run over a folder, scripted, or handed to an AI assistant
+rather than performed by hand in the GUI. The work this fork exists for has
+exactly that shape: hundreds of weapon meshes needing the same small edit.
+
+This fork adds three operations to upstream's fourteen:
+
+```
+--SetEffectShaderEmission <path>   follows the named block's Shader Property
+                                   link, requires a BSEffectShaderProperty,
+                                   and zeroes Base Color RGB and Base Color
+                                   Scale, keeping the colour alpha and the
+                                   rest of the shader data
+--RemoveBranch <path>              removes the named block and its
+                                   descendants, then runs NifSkope's block
+                                   reordering before saving.  Skips missing or
+                                   duplicate names, non-removable blocks, and
+                                   branches with shared descendants
+--BlockName <name>                 names the target block for both of the
+                                   above.  Exact and case-sensitive
+```
+
+Both take a NIF path or a folder processed recursively, and **overwrite input
+files in place**. The motivating case was stripping ENB particle-light nodes
+and their emission from Skyrim meshes.
+
+Three traps worth stating plainly, because an assistant running these
+unattended will hit all three:
+
+* There is **no dry run and no backup**. A folder argument recurses. Point it
+  at copies.
+* `--BlockName` matching is exact and case-sensitive, and a near-miss **matches
+  nothing rather than erroring** — a run that did nothing looks identical to a
+  run that succeeded.
+* The exe is **GUI-subsystem**, so it cannot write to the console that launched
+  it. Run it directly and `--no-gui` appears to do nothing. Redirect output to
+  a file, or use a wrapper script.
+
+These three were written by **Codex (OpenAI)**, not by Claude. They lived only
+as an uncommitted working-tree edit plus a patched binary until being committed
+to the `cli-headless-ops` branch.
+
 ## Rotation axes: R / P / Y are X / Y / Z
 
 Block Details labels a rotation `R`, `P`, `Y`. Those are fed from
@@ -155,7 +209,7 @@ transposes a rotation — no error, just a wrong result.
 |---|---|
 | `src/glview.h` | nudge key enum, step constants, ramp state, `eventFilter` declaration |
 | `src/glview.cpp` | the whole feature: key mapping, event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
-| `src/main.cpp` | window title: `NifSkope R` plus a build marker |
+| `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
 | `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 | `acpbuild.sh` | build helper |
@@ -211,6 +265,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 5 | `bhkBoxShape` dimensions on L / W / H |
 | ALPHA 6 | radius moved from C to R; L lengthens a capsule |
 | ALPHA 7 | Shift+L / Ctrl+L grow one end of a capsule |
+| ALPHA 7.1 | headless CLI operations merged in from `cli-headless-ops` |
 
 ## Not done
 
