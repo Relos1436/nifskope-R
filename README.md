@@ -1,5 +1,11 @@
 ﻿# NifSkope 2.0.dev11
 
+> ### ⚙ NifSkope R — a fork tailored to collision work
+>
+> This build exists for one job: **editing Havok collision shapes.** Capsules, boxes and transform shapes can be resized, moved and rotated directly from the keyboard, in exact repeatable steps, which stock NifSkope cannot do at all. Everything else is upstream NifSkope, untouched.
+>
+> **[→ Collision controls and what changed](#nifskope-r--keyboard-editing-of-havok-collision)**
+
 NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF is used by video games such as Morrowind, Oblivion, Skyrim, Fallout 3/NV/4/76, Starfield, Civilization IV, and more.
 
 ---
