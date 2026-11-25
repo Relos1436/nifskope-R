@@ -1,5 +1,25 @@
  == CHANGELOG ==
 
+#### NifSkope R (fork of fo76utils/nifskope, branch `acp-collision-nudge`)
+
+Changes in this fork only. Everything below this section is upstream's changelog.
+
+* Havok collision shapes can be edited from the keyboard. Upstream's mouse-drag transforms (I/O/J/K) reject every `bhk` block in `GLView::transformItem` and do nothing on collision; this adds a keyboard route instead. Select the collision block in the Block List, hold a modifier, tap the arrow keys. Up/Right increases, Down/Left decreases:
+  * **R** — `bhkCapsuleShape` radius, writing `Radius`, `Radius 1` and `Radius 2` together, since all three must agree.
+  * **L** — `bhkCapsuleShape` length, both end points moving apart along the capsule's own axis about their midpoint, so a tilted capsule stays tilted.
+  * **Shift + L** / **Ctrl + L** — `bhkCapsuleShape` length, moving only the `First Point` or only the `Second Point` end. The midpoint shifts as a consequence; plain L exists for when it should not.
+  * **W / L / H** — `bhkBoxShape` `Dimensions` X / Y / Z. These are half-extents, so the box grows on both sides about its own centre.
+  * **X / Y / Z** — translate `bhkConvexTransformShape`, `bhkTransformShape`, `bhkCapsuleShape` (both end points together), `bhkRigidBodyT`, or anything else carrying a `Translation`.
+  * **Shift + X / Y / Z** — rotate the same blocks about that axis, through the shape's own origin. The delta is multiplied into the stored rotation rather than decomposed to Euler and recomposed, so repeated taps do not drift and gimbal lock cannot break it.
+* One tap is 0.0001 for sizes and translations, 0.01 degrees for rotations, applied to the raw field value as shown in Block Details — Havok units, not world units. Holding an arrow past 0.35 s ramps the rate. Every edit is clamped so a radius, half-extent or length cannot reach zero or invert.
+* The keys are claimed application-wide through an event filter, so they work whether focus is on the Block List, Block Details or the viewport, and the Block List's type-ahead search can no longer change the selected block during an edit.
+* **Bare Z no longer triggers View → Center Viewport.** The shortcut was removed because it shadowed the Z axis key; the menu item still works. L (Left View) and W (camera forward) are *not* removed — they are taken over only while a collision block they can edit is selected, and behave normally otherwise.
+* The build target is now `NifSkopeR`, and the window title reads `NifSkope R` followed by a build marker naming the feature set, so a fork build can be told from a stock one on sight. `setApplicationName` is unchanged, so existing settings are not orphaned.
+
+See [ACP-CHANGES.md](ACP-CHANGES.md) for the reasoning, the implementation traps and the build notes.
+
+#### Upstream (fo76utils/nifskope)
+
 * Flatten Branch can be cast on root nodes, this has the same effect as using the spell separately on every child node. A non-recursive version of the spell was also added.
 * Improved the performance of Combine Properties when a large number of texture sets is merged.
 * The Update Bounds spell can now use a faster algorithm that gives somewhat worse results than Miniball, this is configured in the general settings under NIF. The radius of calculated bounding spheres can also be scaled by a factor between 1.0 and 2.0.
