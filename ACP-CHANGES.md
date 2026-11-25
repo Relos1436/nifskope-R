@@ -150,8 +150,10 @@ unattended will hit all three:
 * There is **no dry run and no backup**. A folder argument recurses. Point it
   at copies.
 * `--BlockName` matching is exact and case-sensitive, and a near-miss **matches
-  nothing rather than erroring** — a run that did nothing looks identical to a
-  run that succeeded.
+  nothing rather than erroring**. It prints `Skipped (named block not found or
+  name is ambiguous)` instead of `Saved (...)`, but **exits 0 either way**, so
+  the exit code alone cannot distinguish a no-op from a successful edit. Capture
+  stdout and check for `Saved`. Verified against the ALPHA 7.1 build.
 * The exe is **GUI-subsystem**, so it cannot write to the console that launched
   it. Run it directly and `--no-gui` appears to do nothing. Redirect output to
   a file, or use a wrapper script.

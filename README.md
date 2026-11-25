@@ -84,7 +84,7 @@ Upstream's own fourteen cover bounds, tangent spaces, index optimisation, duplic
 **Three things to know before pointing an assistant at your meshes:**
 
 * **Every operation overwrites the input file in place**, and a folder argument is processed **recursively**. There is no dry run and no backup. Work on copies.
-* **`--BlockName` is exact and case-sensitive.** A near-miss silently matches nothing rather than erroring.
+* **`--BlockName` is exact and case-sensitive.** A near-miss matches nothing rather than erroring. It does say so — `Skipped (named block not found or name is ambiguous)` — but **the exit code is 0 either way**, so a script that only checks the exit code cannot tell a no-op from a successful edit. Capture stdout and look for `Saved`.
 * **The exe is GUI-subsystem**, so it cannot write to the console that launched it. Run it directly and `--no-gui` appears to do nothing at all. Redirect its output to a file, or use a small wrapper script that does.
 
 ### What changed in the source
