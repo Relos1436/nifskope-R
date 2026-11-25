@@ -4,7 +4,7 @@
 >
 > This build exists for one job: **editing Havok collision shapes.** Capsules, boxes and transform shapes can be resized, moved and rotated directly from the keyboard, in exact repeatable steps, which stock NifSkope cannot do at all. Everything else is upstream NifSkope, untouched.
 >
-> **[→ Collision controls and what changed](#nifskope-r--keyboard-editing-of-havok-collision)**
+> **[⬇ Download a build](https://github.com/Relos1436/nifskope-R/releases/latest)** · **[→ Collision controls and what changed](#nifskope-r--keyboard-editing-of-havok-collision)**
 
 NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF is used by video games such as Morrowind, Oblivion, Skyrim, Fallout 3/NV/4/76, Starfield, Civilization IV, and more.
 
@@ -15,6 +15,12 @@ NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF
 **This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`. It adds one feature: Havok collision shapes can be edited from the keyboard, in small exact steps.** Everything else below this section is upstream's own README, unchanged.
 
 The work is on the branch [`acp-collision-nudge`](https://github.com/Relos1436/nifskope-R/tree/acp-collision-nudge). `develop` is kept matching upstream so their changes merge cleanly.
+
+### Download
+
+Portable Windows x64 builds are on the [Releases](https://github.com/Relos1436/nifskope-R/releases) page. Unzip anywhere and run `NifSkopeR.exe` — nothing is installed, and it does not interfere with an existing NifSkope install. The exe is unsigned, so SmartScreen will warn on first run.
+
+These are **alpha** builds: hand-tested during development, with no automated test coverage. Back up NIFs before editing them.
 
 ### Why
 
