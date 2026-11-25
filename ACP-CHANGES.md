@@ -56,7 +56,7 @@ Down/Left decreases.
 | hold | effect | block | step per tap |
 |---|---|---|---|
 | **R** | radius | `bhkCapsuleShape` | 0.0001 |
-| **L** | length, both ends | `bhkCapsuleShape` | 0.0002 overall |
+| **L** | length, both ends | `bhkCapsuleShape` | 0.0001 per end |
 | **Shift + L** | length, `First Point` end only | `bhkCapsuleShape` | 0.0001 |
 | **Ctrl + L** | length, `Second Point` end only | `bhkCapsuleShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |

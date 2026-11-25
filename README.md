@@ -33,11 +33,7 @@ These are **alpha** builds: hand-tested during development, with no automated te
 
 ### Why
 
-Upstream does have mouse-drag transforms — hold **I** (scale), **O** (translate), **J** (rotate XY) or **K** (rotate Z) and drag — and they work, on meshes and `NiNode`s. They shipped in `NifSkope-2.0.dev11-20251230`. Two things keep them off collision.
-
-`GLView::transformItem` accepts only `BSGeometry`, `BSTriShape`, `NiNode` and `NiTriBasedGeom`. No `bhk` type inherits from any of those, so every collision block falls outside the list and the function returns immediately — silently: no message, no error, the drag simply does nothing. Skinned shapes are rejected the same way, and there is no undo for the feature at all.
-
-The modifier keys also only register while the **viewport itself has keyboard focus**: `GLView` is a `QWindow` set to `ClickFocus`, so once a block is picked in the Block List the keypress goes to the tree and never reaches the viewport. That is why the drag transforms can look broken even on a mesh — the usual way to make them work is to click the shape in the viewport, which both selects it and gives the viewport focus. Collision blocks cannot be picked that way, so the two problems compound. Dragging the parent `NiNode` does work, but it moves the mesh along with the collision, so it cannot be used to fit one against the other.
+Upstream's mouse-drag transforms — hold **I**, **O**, **J** or **K** and drag — work on meshes and `NiNode`s, but never on collision. `GLView::transformItem` accepts only `BSGeometry`, `BSTriShape`, `NiNode` and `NiTriBasedGeom`, and no `bhk` type is one of those, so the drag silently does nothing. They also need the viewport to hold keyboard focus, which is normally granted by clicking the shape — and viewport picking selects geometry, never collision.
 
 This fork exists for VR weapon collision work, where shapes are adjusted against the mesh by small amounts, repeatedly, and judged by eye. Arrow keys with a fixed step are exact and repeatable in a way dragging is not.
 
@@ -48,7 +44,7 @@ Select the collision block in the **Block List** first, then hold a modifier and
 | hold | effect | block | step per tap |
 |---|---|---|---|
 | **R** | radius | `bhkCapsuleShape` | 0.0001 |
-| **L** | length, both ends | `bhkCapsuleShape` | 0.0002 overall |
+| **L** | length, both ends | `bhkCapsuleShape` | 0.0001 per end |
 | **Shift + L** | length, `First Point` end only | `bhkCapsuleShape` | 0.0001 |
 | **Ctrl + L** | length, `Second Point` end only | `bhkCapsuleShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
