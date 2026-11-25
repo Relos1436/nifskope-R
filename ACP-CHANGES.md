@@ -31,6 +31,16 @@ the drag silently does nothing. Dragging the parent `NiNode` works, but it moves
 the mesh along with the collision, so it cannot be used to fit one against the
 other.
 
+The drag transforms have a second limitation worth recording, because it makes
+them look broken even on a mesh: `I`/`O`/`J`/`K` reach `kbdState` only through
+`GLView::keyPressEvent`, and `GLView` is a `QWindow` set to `ClickFocus`. Unless
+the viewport itself holds keyboard focus the modifier never arrives, so picking a
+block in the Block List and then holding `O` does nothing. In practice the
+feature is used by clicking the shape in the viewport, which selects it and
+focuses the viewport in one action. That route is closed for collision blocks,
+which viewport picking does not select — the same reason the nudge keys here are
+routed through an application-level event filter instead.
+
 The work this fork exists for is VR weapon collision, where shapes have to be
 adjusted against the mesh by small amounts, repeatedly, and judged by eye. Mouse
 dragging is the wrong instrument for that even where it works. Arrow keys with a

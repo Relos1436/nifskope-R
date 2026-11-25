@@ -33,7 +33,11 @@ These are **alpha** builds: hand-tested during development, with no automated te
 
 ### Why
 
-Upstream has mouse-drag transforms — hold **I**/**O**/**J**/**K** and drag — but they do not work on collision. `GLView::transformItem` rejects every `bhk` block before doing anything, silently: no message, no error, the drag simply does nothing. Dragging the parent `NiNode` works, but moves the mesh along with the collision, so it cannot be used to fit one against the other.
+Upstream does have mouse-drag transforms — hold **I** (scale), **O** (translate), **J** (rotate XY) or **K** (rotate Z) and drag — and they work, on meshes and `NiNode`s. They shipped in `NifSkope-2.0.dev11-20251230`. Two things keep them off collision.
+
+`GLView::transformItem` accepts only `BSGeometry`, `BSTriShape`, `NiNode` and `NiTriBasedGeom`. No `bhk` type inherits from any of those, so every collision block falls outside the list and the function returns immediately — silently: no message, no error, the drag simply does nothing. Skinned shapes are rejected the same way, and there is no undo for the feature at all.
+
+The modifier keys also only register while the **viewport itself has keyboard focus**: `GLView` is a `QWindow` set to `ClickFocus`, so once a block is picked in the Block List the keypress goes to the tree and never reaches the viewport. That is why the drag transforms can look broken even on a mesh — the usual way to make them work is to click the shape in the viewport, which both selects it and gives the viewport focus. Collision blocks cannot be picked that way, so the two problems compound. Dragging the parent `NiNode` does work, but it moves the mesh along with the collision, so it cannot be used to fit one against the other.
 
 This fork exists for VR weapon collision work, where shapes are adjusted against the mesh by small amounts, repeatedly, and judged by eye. Arrow keys with a fixed step are exact and repeatable in a way dragging is not.
 
