@@ -2,6 +2,60 @@
 
 NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF is used by video games such as Morrowind, Oblivion, Skyrim, Fallout 3/NV/4/76, Starfield, Civilization IV, and more.
 
+---
+
+## NifSkope R — keyboard editing of Havok collision
+
+**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`. It adds one feature: Havok collision shapes can be edited from the keyboard, in small exact steps.** Everything else below this section is upstream's own README, unchanged.
+
+The work is on the branch [`acp-collision-nudge`](https://github.com/Relos1436/nifskope-R/tree/acp-collision-nudge). `develop` is kept matching upstream so their changes merge cleanly.
+
+### Why
+
+Upstream has mouse-drag transforms — hold **I**/**O**/**J**/**K** and drag — but they do not work on collision. `GLView::transformItem` rejects every `bhk` block before doing anything, silently: no message, no error, the drag simply does nothing. Dragging the parent `NiNode` works, but moves the mesh along with the collision, so it cannot be used to fit one against the other.
+
+This fork exists for VR weapon collision work, where shapes are adjusted against the mesh by small amounts, repeatedly, and judged by eye. Arrow keys with a fixed step are exact and repeatable in a way dragging is not.
+
+### Controls
+
+Select the collision block in the **Block List** first, then hold a modifier and tap the arrow keys. Up/Right increases, Down/Left decreases. The keys work wherever focus is — Block List, Block Details or viewport.
+
+| hold | effect | block | step per tap |
+|---|---|---|---|
+| **R** | radius | `bhkCapsuleShape` | 0.0001 |
+| **L** | length, both ends | `bhkCapsuleShape` | 0.0002 overall |
+| **Shift + L** | length, `First Point` end only | `bhkCapsuleShape` | 0.0001 |
+| **Ctrl + L** | length, `Second Point` end only | `bhkCapsuleShape` | 0.0001 |
+| **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, rigid bodies | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, rigid bodies | 0.01° |
+
+Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so a radius, half-extent or length can never reach zero or invert.
+
+The step applies to the **raw field value as shown in Block Details**, not to world units — those fields are Havok units, 1/69.99125 of world scale. Editing the displayed number directly means there is no conversion to get wrong.
+
+### What changed in the source
+
+| file | change |
+|---|---|
+| `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
+| `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration |
+| `src/main.cpp` | window title: `NifSkope R` plus a build marker |
+| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
+| `NifSkope.pro` | `TARGET = NifSkopeR` |
+
+**One upstream behaviour is removed:** bare `Z` no longer triggers View → Center Viewport. The menu item itself still works. `L` and `W` are *not* removed — Left View and camera-forward keep working, and are taken over only while a collision block they can edit is selected.
+
+### Telling builds apart
+
+The title bar reads `NifSkope R …` and ends with a marker naming the feature set. If that marker is absent, it is a stock build and none of this works.
+
+### Full documentation
+
+**[ACP-CHANGES.md](ACP-CHANGES.md)** — what each key writes and why, the rotation-axis finding, all four implementation traps (Qt focus, shortcut dispatch order, conditional key claiming, the Ctrl guard), build notes including two DLLs the build does not deploy, and the version history.
+
+---
+
 This is an experimental fork of 2.0.dev9 with many fixes and improvements, including:
 
 * Rendering support for Starfield materials.
