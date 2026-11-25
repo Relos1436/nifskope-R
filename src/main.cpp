@@ -35,6 +35,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include "data/nifvalue.h"
 #include "model/nifmodel.h"
 #include "model/kfmmodel.h"
+#include "spells/blocks.h"
 
 #include <QApplication>
 #include <QColorSpace>
@@ -235,6 +236,26 @@ int main( int argc, char * argv[] )
 			QStringLiteral( "path" ) );
 		parser.addOption( guiReorderBlocksOpt );
 
+		QCommandLineOption guiSetEffectShaderEmissionOpt(
+			QStringLiteral( "SetEffectShaderEmission" ),
+			QStringLiteral( "Headless: set a named BSEffectShaderProperty's emission color and multiplier to zero."
+				" Requires -no-gui and --BlockName." ),
+			QStringLiteral( "path" ) );
+		parser.addOption( guiSetEffectShaderEmissionOpt );
+
+		QCommandLineOption guiRemoveBranchOpt(
+			QStringLiteral( "RemoveBranch" ),
+			QStringLiteral( "Headless: remove a named NIF block and its descendants, then reorder blocks."
+				" Requires -no-gui and --BlockName." ),
+			QStringLiteral( "path" ) );
+		parser.addOption( guiRemoveBranchOpt );
+
+		QCommandLineOption guiBlockNameOpt(
+			QStringLiteral( "BlockName" ),
+			QStringLiteral( "Exact NIF block name for --RemoveBranch or --SetEffectShaderEmission." ),
+			QStringLiteral( "name" ) );
+		parser.addOption( guiBlockNameOpt );
+
 		QCommandLineOption guiSanitizeBeforeSaveOpt(
 			QStringLiteral( "SanitizeBeforeSave" ),
 			QStringLiteral( "Headless: fix minor errors (for example duplicate block names) before save."
@@ -263,6 +284,8 @@ int main( int argc, char * argv[] )
 			{ &guiCombinePropertiesOpt, "Error: --CombineProperties requires headless mode. Use: NifSkope -no-gui --CombineProperties <path>\n" },
 			{ &guiRemoveBogusNodesOpt, "Error: --RemoveBogusNodes requires headless mode. Use: NifSkope -no-gui --RemoveBogusNodes <path>\n" },
 			{ &guiReorderBlocksOpt, "Error: --ReorderBlocks requires headless mode. Use: NifSkope -no-gui --ReorderBlocks <path>\n" },
+			{ &guiSetEffectShaderEmissionOpt, "Error: --SetEffectShaderEmission requires headless mode. Use: NifSkope -no-gui --SetEffectShaderEmission <path> --BlockName <name>\n" },
+			{ &guiRemoveBranchOpt, "Error: --RemoveBranch requires headless mode. Use: NifSkope -no-gui --RemoveBranch <path> --BlockName <name>\n" },
 			{ &guiSanitizeBeforeSaveOpt, "Error: --SanitizeBeforeSave requires headless mode. Use: NifSkope -no-gui --SanitizeBeforeSave <path>\n" }
 		};
 
@@ -425,6 +448,26 @@ int main( int argc, char * argv[] )
 			QStringLiteral( "path" ) );
 		parser.addOption( reorderBlocksOpt );
 
+		QCommandLineOption setEffectShaderEmissionOpt(
+			QStringLiteral( "SetEffectShaderEmission" ),
+			QStringLiteral( "Set a named BSEffectShaderProperty's emission color and multiplier to zero."
+				" Accepts a single .nif file or folder (recursive); files are overwritten in-place." ),
+			QStringLiteral( "path" ) );
+		parser.addOption( setEffectShaderEmissionOpt );
+
+		QCommandLineOption removeBranchOpt(
+			QStringLiteral( "RemoveBranch" ),
+			QStringLiteral( "Remove a named block and descendants, then reorder blocks before saving."
+				" Accepts a single .nif file or folder (recursive); files are overwritten in-place." ),
+			QStringLiteral( "path" ) );
+		parser.addOption( removeBranchOpt );
+
+		QCommandLineOption blockNameOpt(
+			QStringLiteral( "BlockName" ),
+			QStringLiteral( "Exact NIF block name required by --RemoveBranch or --SetEffectShaderEmission." ),
+			QStringLiteral( "name" ) );
+		parser.addOption( blockNameOpt );
+
 		QCommandLineOption sanitizeBeforeSaveOpt(
 			QStringLiteral( "SanitizeBeforeSave" ),
 			QStringLiteral( "Fix minor errors (for example duplicate block names) before save."
@@ -440,7 +483,14 @@ int main( int argc, char * argv[] )
 			return 1;
 		}
 
-		if ( !( parser.isSet( convertToInternalGeomOpt ) || parser.isSet( convertToExternalGeomOpt ) || parser.isSet( removeUnusedStringsOpt ) || parser.isSet( removeDuplicateVerticesOpt ) || parser.isSet( removeUnusedVerticesOpt ) || parser.isSet( generateMeshLODsOpt ) || parser.isSet( optimizeIndicesOpt ) || parser.isSet( addTangentSpacesAndUpdateOpt ) || parser.isSet( updateBoundsOpt ) || parser.isSet( combinePropertiesOpt ) || parser.isSet( removeBogusNodesOpt ) || parser.isSet( reorderBlocksOpt ) || parser.isSet( sanitizeBeforeSaveOpt ) ) ) {
+		if ( ( parser.isSet( setEffectShaderEmissionOpt ) || parser.isSet( removeBranchOpt ) )
+			&& ( !parser.isSet( blockNameOpt ) || parser.value( blockNameOpt ).trimmed().isEmpty() ) ) {
+			err << "--SetEffectShaderEmission and --RemoveBranch require a non-empty --BlockName\n";
+			err.flush();
+			return 1;
+		}
+
+		if ( !( parser.isSet( convertToInternalGeomOpt ) || parser.isSet( convertToExternalGeomOpt ) || parser.isSet( removeUnusedStringsOpt ) || parser.isSet( removeDuplicateVerticesOpt ) || parser.isSet( removeUnusedVerticesOpt ) || parser.isSet( generateMeshLODsOpt ) || parser.isSet( optimizeIndicesOpt ) || parser.isSet( addTangentSpacesAndUpdateOpt ) || parser.isSet( updateBoundsOpt ) || parser.isSet( combinePropertiesOpt ) || parser.isSet( removeBogusNodesOpt ) || parser.isSet( reorderBlocksOpt ) || parser.isSet( sanitizeBeforeSaveOpt ) || parser.isSet( setEffectShaderEmissionOpt ) || parser.isSet( removeBranchOpt ) ) ) {
 			err << "NifSkope headless mode: no actionable option specified.\n\n";
 			err << parser.helpText();
 			err.flush();
@@ -689,6 +739,97 @@ int main( int argc, char * argv[] )
 			}
 			return exitCode;
 		};
+
+		auto findNamedBlock = []( NifModel & nif, const QString & blockName ) -> QModelIndex {
+			QModelIndex match;
+			for ( int block = 0; block < nif.getBlockCount(); ++block ) {
+				const QModelIndex index = nif.getBlockIndex( block );
+				if ( index.isValid() && nif.get<QString>( index, "Name" ) == blockName ) {
+					if ( match.isValid() )
+						return QModelIndex();
+					match = index;
+				}
+			}
+			return match;
+		};
+
+		if ( parser.isSet( setEffectShaderEmissionOpt ) ) {
+			const QString blockName = parser.value( blockNameOpt ).trimmed();
+			return runBatchOperation(
+				"SetEffectShaderEmission",
+				parser.value( setEffectShaderEmissionOpt ),
+				"effect shader emission disabled",
+				QString(),
+				true,
+				[ &findNamedBlock, &blockName ]( NifModel & nif, QString & skipReason ) {
+					const QModelIndex namedBlock = findNamedBlock( nif, blockName );
+					if ( !namedBlock.isValid() ) {
+						skipReason = QStringLiteral( "named block not found or name is ambiguous" );
+						return false;
+					}
+					const int shaderLink = nif.getLink( namedBlock, "Shader Property" );
+					const QModelIndex shader = nif.getBlockIndex( shaderLink, "BSEffectShaderProperty" );
+					if ( !shader.isValid() ) {
+						skipReason = QStringLiteral( "named block has no BSEffectShaderProperty" );
+						return false;
+					}
+					const QModelIndex baseColorIndex = nif.getIndex( shader, "Base Color" );
+					const QModelIndex baseColorScaleIndex = nif.getIndex( shader, "Base Color Scale" );
+					if ( !baseColorIndex.isValid() || !baseColorScaleIndex.isValid() ) {
+						skipReason = QStringLiteral( "shader does not expose Skyrim/Fallout 4 emission fields" );
+						return false;
+					}
+					Color4 color = nif.get<Color4>( baseColorIndex );
+					color[0] = color[1] = color[2] = 0.0f;
+					return nif.set<Color4>( baseColorIndex, color )
+						&& nif.set<float>( baseColorScaleIndex, 0.0f );
+				} );
+		}
+
+		if ( parser.isSet( removeBranchOpt ) ) {
+			const QString blockName = parser.value( blockNameOpt ).trimmed();
+			return runBatchOperation(
+				"RemoveBranch",
+				parser.value( removeBranchOpt ),
+				"branch removed and blocks reordered",
+				QString(),
+				true,
+				[ &findNamedBlock, &blockName ]( NifModel & nif, QString & skipReason ) {
+					const QModelIndex branch = findNamedBlock( nif, blockName );
+					if ( !branch.isValid() ) {
+						skipReason = QStringLiteral( "named block not found or name is ambiguous" );
+						return false;
+					}
+					spRemoveBranch removeBranch;
+					if ( !removeBranch.isApplicable( &nif, branch ) ) {
+						skipReason = QStringLiteral( "named block is not a removable branch" );
+						return false;
+					}
+					auto hasSharedDescendants = [ &nif ]( auto && self, int parent, QList<int> & visited ) -> bool {
+						for ( const int child : nif.getChildLinks( parent ) ) {
+							if ( visited.contains( child ) || nif.getRootLinks().contains( child ) )
+								return true;
+							visited.append( child );
+							int owners = 0;
+							for ( int candidate = 0; candidate < nif.getBlockCount(); ++candidate ) {
+								if ( nif.getChildLinks( candidate ).contains( child ) )
+									++owners;
+							}
+							if ( owners != 1 || self( self, child, visited ) )
+								return true;
+						}
+						return false;
+					};
+					QList<int> visited;
+					if ( hasSharedDescendants( hasSharedDescendants, nif.getBlockNumber( branch ), visited ) ) {
+						skipReason = QStringLiteral( "branch has shared descendants; refusing removal" );
+						return false;
+					}
+					removeBranch.cast( &nif, branch );
+					nif.reorderBlocks();
+					return true;
+				} );
+		}
 
 		if ( parser.isSet( removeUnusedStringsOpt ) ) {
 			return runBatchOperation(
