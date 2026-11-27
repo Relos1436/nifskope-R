@@ -76,6 +76,32 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QOpenGLFunctions>
 #include <QOpenGLFramebufferObject>
 
+#include <cstdio>
+
+// ---------------------------------------------------------------------------
+// TEMPORARY diagnostic for the ACP nudge.  Writes one line per key event and
+// per edit to the file named by the NIFSKOPE_ACP_LOG environment variable.
+// With that variable unset -- which is every normal run -- acpLogOn() is false
+// and nothing is opened, written or formatted.  Remove once the Shift+Right
+// fault is understood.
+// ---------------------------------------------------------------------------
+static bool acpLogOn()
+{
+	static const QByteArray	path = qgetenv( "NIFSKOPE_ACP_LOG" );
+	return !path.isEmpty();
+}
+
+static void acpLog( const QString & s )
+{
+	static const QByteArray	path = qgetenv( "NIFSKOPE_ACP_LOG" );
+	if ( path.isEmpty() )
+		return;
+	if ( std::FILE * f = std::fopen( path.constData(), "a" ) ) {
+		std::fprintf( f, "%s\n", s.toLocal8Bit().constData() );
+		std::fclose( f );
+	}
+}
+
 // NOTE: The FPS define is a frame limiter,
 //	NOT the guaranteed FPS in the viewport.
 //	Also the QTimer is integer milliseconds
@@ -2198,6 +2224,16 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 
 	QKeyEvent *	ke = static_cast< QKeyEvent * >( e );
 
+	if ( acpLogOn() ) {
+		const char *	tn = ( t == QEvent::KeyPress ? "press"
+		                       : ( t == QEvent::KeyRelease ? "release" : "override" ) );
+		acpLog( QString( "filter %1 key=0x%2 mods=0x%3 rpt=%4 focus=%5" )
+		        .arg( tn ).arg( ke->key(), 0, 16 )
+		        .arg( unsigned( ke->modifiers() ), 0, 16 )
+		        .arg( int( ke->isAutoRepeat() ) )
+		        .arg( fw ? fw->metaObject()->className() : "none" ) );
+	}
+
 	// Track Ctrl before any early return, so releasing it is never missed and
 	// cannot leave a stale "Ctrl held" behind while L is still down.  On the
 	// release of Ctrl itself, modifiers() no longer reports it, hence the
@@ -2296,6 +2332,9 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	if ( k == Key_CapsuleRadius || k == Key_AxisX || k == Key_AxisY || k == Key_AxisZ
 	     || k == Key_AxisW || k == Key_DimW || k == Key_DimL || k == Key_DimH ) {
 		if ( press ) {
+			if ( acpLogOn() )
+				acpLog( QString( "  modkey k=%1 wouldClaim=%2" )
+				        .arg( k ).arg( int( nudgeWouldClaim( k ) ) ) );
 			if ( !nudgeWouldClaim( k ) )
 				return QOpenGLWindow::eventFilter( o, e );
 			kbdState = kbdState | ( 1ULL << k );
@@ -2344,6 +2383,11 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	if ( arrow < 0 )
 		return QOpenGLWindow::eventFilter( o, e );
 	unsigned int	bit = 1u << (unsigned int) arrow;
+
+	if ( acpLogOn() )
+		acpLog( QString( "  arrow=%1 press=%2 active=%3 claimedMask=%4" )
+		        .arg( arrow ).arg( int( press ) ).arg( int( nudgeActive() ) )
+		        .arg( nudgeArrows ) );
 
 	if ( !press ) {
 		// Only swallow a release whose press was ours; anything else is the
@@ -2488,6 +2532,10 @@ bool GLView::nudgeApply( int steps )
 	QModelIndex	iBlock = scene->currentBlock;
 	float	d = float( steps ) * NUDGE_STEP;
 
+	if ( acpLogOn() )
+		acpLog( QString( "  apply steps=%1 block=%2" )
+		        .arg( steps ).arg( nif->itemName( iBlock ) ) );
+
 	// R: capsule or cylinder radius.  Both store it more than once -- a capsule
 	// as Radius/Radius 1/Radius 2, a cylinder as Radius/Cylinder Radius -- and
 	// every copy must agree, or the shape renders and collides inconsistently.
@@ -2614,6 +2662,10 @@ bool GLView::nudgeApply( int steps )
 			return false;
 		bool	onlyA = kbd( Key_Shift );
 		bool	onlyB = nudgeAlt;
+		if ( acpLogOn() )
+			acpLog( QString( "  cyl axis=%1 d=%2 onlyA=%3 onlyB=%4" )
+			        .arg( axis ).arg( double( d ), 0, 'g', 9 )
+			        .arg( int( onlyA ) ).arg( int( onlyB ) ) );
 		if ( onlyA && onlyB )
 			return false;
 		for ( int j = 0; j < 2; j++ ) {
@@ -2621,8 +2673,17 @@ bool GLView::nudgeApply( int steps )
 				continue;
 			const QModelIndex &	i = ( j == 0 ? iA : iB );
 			Vector4	v = nif->get<Vector4>( i );
-			v[(unsigned int) axis] = v[(unsigned int) axis] + d;
+			float	before = v[(unsigned int) axis];
+			v[(unsigned int) axis] = before + d;
 			nif->set<Vector4>( i, v );
+			if ( acpLogOn() ) {
+				float	after = nif->get<Vector4>( i )[(unsigned int) axis];
+				acpLog( QString( "    vert%1 %2 -> wrote %3 -> reads %4" )
+				        .arg( j == 0 ? "A" : "B" )
+				        .arg( double( before ), 0, 'g', 9 )
+				        .arg( double( before + d ), 0, 'g', 9 )
+				        .arg( double( after ), 0, 'g', 9 ) );
+			}
 		}
 		return true;
 	}

@@ -46,6 +46,31 @@ adjusted against the mesh by small amounts, repeatedly, and judged by eye. Mouse
 dragging is the wrong instrument for that even where it works. Arrow keys with a
 fixed step are exact and repeatable.
 
+## Diagnostics
+
+Set `NIFSKOPE_ACP_LOG` to a file path and the nudge writes one line per key
+event and per edit to it: the key code and modifiers as Qt reports them, which
+widget had focus, whether the nudge claimed the key, and for each write the
+value before, the value written and the value read back from the model. With
+the variable unset -- every normal run -- nothing is opened or formatted.
+
+```powershell
+$env:NIFSKOPE_ACP_LOG = "$env:TEMP\acp-nudge.log"; & "...\NifSkopeR.exe"
+```
+
+This exists because a reported "Shift+Y will not increase, only decrease" fault
+turned out to be **keyboard ghosting, not a bug**. The log showed Shift+Y+Left
+arriving 42 times and editing correctly, Alt+Y+Right arriving 42 times and
+editing correctly, and Shift+Y+Right producing *no event of any kind* -- not
+even the `ShortcutOverride` Qt sends before any shortcut can consume a press.
+A key the process never receives cannot be a fault in the process. Most
+keyboards block certain three-key combinations; the other Shift key, or Up
+instead of Right, usually goes through.
+
+Reach for this before theorising about the nudge again. Reasoning about the
+code ruled out every candidate it could and still had the answer backwards;
+one run of the log settled it in a minute.
+
 ## Controls
 
 Select the collision block in the **Block List** first — `scene->currentBlock`
