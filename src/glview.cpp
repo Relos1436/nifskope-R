@@ -2154,7 +2154,7 @@ void GLView::wheelEvent( QWheelEvent * event )
 //
 //   X/Y/Z/W          bhkCylinderShape   that component of BOTH vertices
 //   Shift+X/Y/Z/W    bhkCylinderShape   Vertex A only
-//   Ctrl+X/Y/Z/W     bhkCylinderShape   Vertex B only
+//   Alt+X/Y/Z/W      bhkCylinderShape   Vertex B only
 //
 // Up / Right increase, Down / Left decrease.  There is no undo, exactly as
 // with the existing mouse-drag transform -- work on copies.
@@ -2176,6 +2176,8 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 		                         | ( 1ULL << Key_AxisW ) | ( 1ULL << Key_DimW )
 		                         | ( 1ULL << Key_DimL ) | ( 1ULL << Key_DimH ) );
 		nudgeArrows = 0;
+		nudgeCtrl = false;
+		nudgeAlt = false;
 		nudgeDir = 0;
 		nudgeCtrl = false;
 		return QOpenGLWindow::eventFilter( o, e );
@@ -2205,8 +2207,12 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	else if ( t != QEvent::ShortcutOverride )
 		nudgeCtrl = bool( ke->modifiers() & Qt::ControlModifier );
 
-	if ( ke->modifiers() & Qt::AltModifier )
-		return QOpenGLWindow::eventFilter( o, e );
+	// Alt is tracked the same way, and for the same reason: nudgeTick() runs
+	// on frames and has no event to ask.  Alt, not Ctrl, carries "Vertex B".
+	if ( ke->key() == Qt::Key_Alt )
+		nudgeAlt = ( t == QEvent::KeyPress );
+	else if ( t != QEvent::ShortcutOverride )
+		nudgeAlt = bool( ke->modifiers() & Qt::AltModifier );
 
 	bool	twoPoint = ( scene->nifModel && scene->currentBlock.isValid()
 	                     && scene->nifModel->blockInherits( scene->currentBlock,
@@ -2215,27 +2221,33 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	bool	cylinder = ( scene->nifModel && scene->currentBlock.isValid()
 	                     && scene->nifModel->blockInherits( scene->currentBlock,
 	                                                        "bhkCylinderShape" ) );
+	bool	isAxisKey = ( ke->key() == Qt::Key_X || ke->key() == Qt::Key_Y
+	                      || ke->key() == Qt::Key_Z || ke->key() == Qt::Key_W );
+	bool	isArrow = ( ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down
+	                    || ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Right );
 
-	// Ctrl means a menu command, so it is passed straight through -- with two
-	// exceptions, both only while the block they apply to is selected:
-	//
-	//   Ctrl+L                 capsule or cylinder, grows the second end
-	//   Ctrl+X / Y / Z / W     cylinder, moves Vertex B alone
-	//
-	// Ctrl+L is free in NifSkope.  CTRL+X, CTRL+Y AND CTRL+Z ARE NOT -- they
-	// are Cut, Redo and Undo.  While a cylinder is selected those three are
-	// shadowed and do nothing; selecting any other block hands them straight
-	// back.  That is the price of the per-vertex keys, and is deliberate: the
-	// nudge has no undo of its own, so Ctrl+Z was never useful mid-edit.
-	// The exception is NOT extended to a box, where Ctrl+L would silently act
-	// like plain L.
+	// Alt normally belongs to the menu bar, so it is passed straight through
+	// -- except Alt+X / Y / Z / W while a cylinder is selected, which moves
+	// Vertex B alone, and the arrows that follow it.  Alt was chosen over
+	// Ctrl for exactly one reason: Ctrl+X, Ctrl+Y and Ctrl+Z are Cut, Redo
+	// and Undo, and binding those shadowed all three.  Alt+X/Y/Z/W are not
+	// NifSkope accelerators, and a bare Alt still reaches the menu bar.
+	if ( ke->modifiers() & Qt::AltModifier ) {
+		bool	isVert = ( cylinder && ( isAxisKey || ( isArrow && nudgeActive() ) ) );
+		if ( !isVert )
+			return QOpenGLWindow::eventFilter( o, e );
+	}
+
+	// Ctrl means a menu command, so it is passed straight through -- with one
+	// exception: Ctrl+L, and the arrows that follow it, while a capsule or
+	// cylinder is selected, which grows the second end.  Ctrl+L is unused in
+	// NifSkope, whose own Ctrl bindings are Ctrl+F9, Ctrl+Alt+S, Ctrl+Up and
+	// the standard Undo/Redo/Save/New/Cut/Copy/Paste -- none of which this
+	// shadows.  The exception is NOT extended to a box, where Ctrl+L would
+	// silently act like plain L.
 	if ( ke->modifiers() & Qt::ControlModifier ) {
 		bool	isL = ( ke->key() == Qt::Key_L );
-		bool	isVert = ( cylinder && ( ke->key() == Qt::Key_X || ke->key() == Qt::Key_Y
-		                                 || ke->key() == Qt::Key_Z || ke->key() == Qt::Key_W ) );
-		bool	isArrow = ( ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down
-		                    || ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Right );
-		if ( !( isVert || ( twoPoint && ( isL || ( isArrow && nudgeActive() ) ) ) ) )
+		if ( !( twoPoint && ( isL || ( isArrow && nudgeActive() ) ) ) )
 			return QOpenGLWindow::eventFilter( o, e );
 	}
 
@@ -2584,7 +2596,7 @@ bool GLView::nudgeApply( int steps )
 	//
 	//   X / Y / Z / W           both vertices move together
 	//   Shift + X / Y / Z / W   Vertex A only
-	//   Ctrl  + X / Y / Z / W   Vertex B only
+	//   Alt   + X / Y / Z / W   Vertex B only
 	//
 	// This branch sits BEFORE the Shift-rotate branch below, and returns, so
 	// a cylinder never reaches it: Shift on a cylinder means "Vertex A", not
@@ -2601,7 +2613,7 @@ bool GLView::nudgeApply( int steps )
 		if ( !( iA.isValid() && iB.isValid() ) )
 			return false;
 		bool	onlyA = kbd( Key_Shift );
-		bool	onlyB = nudgeCtrl;
+		bool	onlyB = nudgeAlt;
 		if ( onlyA && onlyB )
 			return false;
 		for ( int j = 0; j < 2; j++ ) {

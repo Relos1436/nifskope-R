@@ -59,14 +59,14 @@ A `bhkCylinderShape` shares **R** and **L** with a capsule, but its position is 
 |---|---|
 | **X / Y / Z / W** | that component of **both** vertices |
 | **Shift + X / Y / Z / W** | `Vertex A` only |
-| **Ctrl + X / Y / Z / W** | `Vertex B` only |
+| **Alt + X / Y / Z / W** | `Vertex B` only |
 
 **W** means the fourth component only while a cylinder is selected; with a box selected it is still the width key, and with neither it is still camera-forward.
 
 Two consequences worth knowing:
 
 * **A cylinder has no rotate key.** Shift means "Vertex A" here, so it cannot also mean "rotate". Capsules, transform shapes and rigid bodies still rotate with **Shift + X / Y / Z**.
-* **Ctrl + X, Ctrl + Y and Ctrl + Z are shadowed while a cylinder is selected** — those are Cut, Redo and Undo. They do nothing until you select a different block. Collision edits have no undo in any case.
+* **Alt, not Ctrl, carries `Vertex B`.** Ctrl+X, Ctrl+Y and Ctrl+Z are Cut, Redo and Undo, and binding those shadowed all three. Alt+X/Y/Z/W are not NifSkope accelerators, and a bare Alt still opens the menu bar as usual.
 
 Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so a radius, half-extent or length can never reach zero or invert.
 

@@ -75,7 +75,7 @@ either; the field names differ (`First Point`/`Second Point` against
 |---|---|---|
 | **X / Y / Z / W** | both vertices | `Vertex A` and `Vertex B` |
 | **Shift + X / Y / Z / W** | first vertex only | `Vertex A` |
-| **Ctrl + X / Y / Z / W** | second vertex only | `Vertex B` |
+| **Alt + X / Y / Z / W** | second vertex only | `Vertex B` |
 
 Three things follow from that, all deliberate:
 
@@ -86,10 +86,11 @@ Three things follow from that, all deliberate:
 * **A cylinder has no rotate key.** Shift selects a vertex here, so it cannot
   also mean rotate. The cylinder branch in `nudgeApply()` sits before the
   Shift-rotate branch and returns, so a cylinder never reaches it.
-* **Ctrl+X, Ctrl+Y and Ctrl+Z are shadowed while a cylinder is selected** --
-  Cut, Redo and Undo. This is the real cost of the Ctrl bindings and it is
-  accepted knowingly: the nudge has no undo of its own, so Ctrl+Z was never
-  useful mid-edit, and selecting any other block hands all three straight back.
+* **Alt carries Vertex B, not Ctrl.** Ctrl+X, Ctrl+Y and Ctrl+Z are Cut,
+  Redo and Undo; binding them shadowed all three while a cylinder was
+  selected, which was not worth it. Alt+X/Y/Z/W collide with nothing, and a
+  bare Alt still reaches the menu bar because only Alt *with* one of those
+  keys is swallowed. Ctrl+L is unchanged — it is genuinely free.
 
 The W component is one Havok ignores on a cylinder. It is written anyway,
 because it is a real field visible in Block Details and nothing else in the
@@ -267,7 +268,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 9.1 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]
+[ACP ALPHA 10 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B)]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -314,6 +315,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 8 | every capsule key applies to `bhkCylinderShape` too |
 | ALPHA 9 | cylinder position edited per vertex: X/Y/Z/W, Shift = Vertex A, Ctrl = Vertex B |
 | ALPHA 9.1 | fixed the camera spinning on after a nudge: claimed arrows no longer share the camera's rotate bits |
+| ALPHA 10 | cylinder `Vertex B` moved from Ctrl to Alt, freeing Cut/Redo/Undo |
 
 ## Not done
 

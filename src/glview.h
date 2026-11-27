@@ -323,7 +323,11 @@ private:
 	//! Ctrl is held.  Read from events, not kbdState: nudgeTick() runs on
 	//! frames and has no event to ask.  Ctrl+L grows a capsule's Second Point
 	//! end, as Shift+L grows its First Point end.
-	bool nudgeCtrl = false;			//!< +1, -1 or 0: arrow direction last frame
+	bool nudgeCtrl = false;
+	//! Alt is held.  Tracked like nudgeCtrl, and for the same reason.
+	//! Alt+X/Y/Z/W moves a cylinder's Vertex B, as Shift moves Vertex A.
+	//! Alt rather than Ctrl because Ctrl+X/Y/Z are Cut, Redo and Undo.
+	bool nudgeAlt = false;
 	float nudgeHeld = 0.0f;		//!< seconds the arrow has been held down
 	float nudgeAccum = 0.0f;	//!< fractional steps carried between frames
 	bool nudgeWouldClaim( int k ) const;	//!< would modifier `k` act on the current block?
