@@ -4,7 +4,7 @@
 >
 > This build adds two things stock NifSkope cannot do:
 >
-> 1. **Editing Havok collision shapes from the keyboard.** Capsules, boxes and transform shapes resized, moved and rotated in exact repeatable steps.
+> 1. **Editing Havok collision shapes from the keyboard.** Capsules, cylinders, boxes and transform shapes resized, moved and rotated in exact repeatable steps.
 > 2. **Headless NIF commands** for zeroing an effect shader's emission and removing a named branch — editing meshes with no window open, which is what lets an AI assistant do it for you.
 >
 > Everything else is upstream NifSkope, untouched.
@@ -43,13 +43,15 @@ Select the collision block in the **Block List** first, then hold a modifier and
 
 | hold | effect | block | step per tap |
 |---|---|---|---|
-| **R** | radius | `bhkCapsuleShape` | 0.0001 |
-| **L** | length, both ends | `bhkCapsuleShape` | 0.0001 per end |
-| **Shift + L** | length, `First Point` end only | `bhkCapsuleShape` | 0.0001 |
-| **Ctrl + L** | length, `Second Point` end only | `bhkCapsuleShape` | 0.0001 |
+| **R** | radius | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **L** | length, both ends | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 per end |
+| **Shift + L** | length, first end only (`First Point` / `Vertex A`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **Ctrl + L** | length, second end only (`Second Point` / `Vertex B`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
-| **X / Y / Z** | translate along that axis | transform shapes, capsules, rigid bodies | 0.0001 |
-| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, rigid bodies | 0.01° |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, cylinders, rigid bodies | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, cylinders, rigid bodies | 0.01° |
+
+**Capsules and cylinders behave identically.** Both are an axis between two end points plus a radius, so every key above treats them the same way; only the field names differ (`First Point`/`Second Point` against `Vertex A`/`Vertex B`). A cylinder's end points are stored as Vector4 and their unused W component is carried through untouched.
 
 Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so a radius, half-extent or length can never reach zero or invert.
 

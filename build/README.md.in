@@ -1,6 +1,115 @@
 ﻿# NifSkope @VERSION@
 
+> ### ⚙ NifSkope R — a fork tailored to collision work
+>
+> This build adds two things stock NifSkope cannot do:
+>
+> 1. **Editing Havok collision shapes from the keyboard.** Capsules, cylinders, boxes and transform shapes resized, moved and rotated in exact repeatable steps.
+> 2. **Headless NIF commands** for zeroing an effect shader's emission and removing a named branch — editing meshes with no window open, which is what lets an AI assistant do it for you.
+>
+> Everything else is upstream NifSkope, untouched.
+>
+> **[⬇ Download a build](https://github.com/Relos1436/nifskope-R/releases/latest)** · **[→ What this fork adds](#nifskope-r--collision-editing-and-headless-nif-commands)**
+
 NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF is used by video games such as Morrowind, Oblivion, Skyrim, Fallout 3/NV/4/76, Starfield, Civilization IV, and more.
+
+---
+
+## NifSkope R — collision editing and headless NIF commands
+
+**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
+
+Branches:
+
+* [`acp-collision-nudge`](https://github.com/Relos1436/nifskope-R/tree/acp-collision-nudge) — the default. Collision editing, with the headless commands merged in, so one build has both.
+* [`cli-headless-ops`](https://github.com/Relos1436/nifskope-R/tree/cli-headless-ops) — the headless commands alone, branched off `develop`.
+* `develop` — kept matching upstream so their changes merge cleanly.
+
+### Download
+
+Portable Windows x64 builds are on the [Releases](https://github.com/Relos1436/nifskope-R/releases) page. Unzip anywhere and run `NifSkopeR.exe` — nothing is installed, and it does not interfere with an existing NifSkope install. The exe is unsigned, so SmartScreen will warn on first run.
+
+These are **alpha** builds: hand-tested during development, with no automated test coverage. Back up NIFs before editing them.
+
+### Why
+
+Upstream's mouse-drag transforms — hold **I**, **O**, **J** or **K** and drag — work on meshes and `NiNode`s, but never on collision. `GLView::transformItem` accepts only `BSGeometry`, `BSTriShape`, `NiNode` and `NiTriBasedGeom`, and no `bhk` type is one of those, so the drag silently does nothing. They also need the viewport to hold keyboard focus, which is normally granted by clicking the shape — and viewport picking selects geometry, never collision.
+
+This fork exists for VR weapon collision work, where shapes are adjusted against the mesh by small amounts, repeatedly, and judged by eye. Arrow keys with a fixed step are exact and repeatable in a way dragging is not.
+
+### Controls
+
+Select the collision block in the **Block List** first, then hold a modifier and tap the arrow keys. Up/Right increases, Down/Left decreases. The keys work wherever focus is — Block List, Block Details or viewport.
+
+| hold | effect | block | step per tap |
+|---|---|---|---|
+| **R** | radius | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **L** | length, both ends | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 per end |
+| **Shift + L** | length, first end only (`First Point` / `Vertex A`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **Ctrl + L** | length, second end only (`Second Point` / `Vertex B`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, cylinders, rigid bodies | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, cylinders, rigid bodies | 0.01° |
+
+**Capsules and cylinders behave identically.** Both are an axis between two end points plus a radius, so every key above treats them the same way; only the field names differ (`First Point`/`Second Point` against `Vertex A`/`Vertex B`). A cylinder's end points are stored as Vector4 and their unused W component is carried through untouched.
+
+Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so a radius, half-extent or length can never reach zero or invert.
+
+The step applies to the **raw field value as shown in Block Details**, not to world units — those fields are Havok units, 1/69.99125 of world scale. Editing the displayed number directly means there is no conversion to get wrong.
+
+### Headless mode — editing NIFs with no window open
+
+Normally NifSkope is something you click in: open a mesh, find a block, change fields, save. **Headless mode** runs the same program with `--no-gui` plus a command, so it opens the file, applies one operation, saves it and exits. Nothing appears on screen.
+
+Upstream added headless mode in June 2026 and it is still unreleased — it exists only in `develop` builds, which is why the tagged NifSkope releases ignore `--no-gui` entirely.
+
+**Why it matters: it turns a mesh edit into something you can type.** And anything you can type, an AI assistant can run for you. Instead of opening forty meshes and repeating the same fiddly block edit in each, you describe what you want — *"strip the ENB particle lights out of these meshes"* — and the assistant runs one command against the folder. The work that made this fork worth building is exactly that shape: hundreds of weapon meshes, the same small edit in each.
+
+This fork adds three operations to the fourteen upstream already has:
+
+```
+--SetEffectShaderEmission <path>   zero a BSEffectShaderProperty's Base Color
+                                   RGB and Base Color Scale, keeping the colour
+                                   alpha and the rest of the shader data
+--RemoveBranch <path>              remove a named block and its descendants,
+                                   then reorder blocks before saving
+--BlockName <name>                 names the target block for both of the
+                                   above; exact, case-sensitive
+```
+
+```powershell
+NifSkopeR.exe --no-gui --RemoveBranch "C:\meshes" --BlockName "EnbParticleLight01"
+```
+
+Upstream's own fourteen cover bounds, tangent spaces, index optimisation, duplicate and unused vertex removal, unused strings, bogus nodes, property merging, block reordering, sanitising before save, and three Starfield geometry conversions. `--help` lists them all.
+
+**Three things to know before pointing an assistant at your meshes:**
+
+* **Every operation overwrites the input file in place**, and a folder argument is processed **recursively**. There is no dry run and no backup. Work on copies.
+* **`--BlockName` is exact and case-sensitive.** A near-miss matches nothing rather than erroring. It does say so — `Skipped (named block not found or name is ambiguous)` — but **the exit code is 0 either way**, so a script that only checks the exit code cannot tell a no-op from a successful edit. Capture stdout and look for `Saved`.
+* **The exe is GUI-subsystem**, so it cannot write to the console that launched it. Run it directly and `--no-gui` appears to do nothing at all. Redirect its output to a file, or use a small wrapper script that does.
+
+### What changed in the source
+
+| file | change |
+|---|---|
+| `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
+| `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration |
+| `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
+| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
+| `NifSkope.pro` | `TARGET = NifSkopeR` |
+
+**One upstream behaviour is removed:** bare `Z` no longer triggers View → Center Viewport. The menu item itself still works. `L` and `W` are *not* removed — Left View and camera-forward keep working, and are taken over only while a collision block they can edit is selected.
+
+### Telling builds apart
+
+The title bar reads `NifSkope R …` and ends with a marker naming the feature set. If that marker is absent, it is a stock build and none of this works.
+
+### Full documentation
+
+**[ACP-CHANGES.md](ACP-CHANGES.md)** — what each key writes and why, the rotation-axis finding, all four implementation traps (Qt focus, shortcut dispatch order, conditional key claiming, the Ctrl guard), build notes including two DLLs the build does not deploy, and the version history.
+
+---
 
 This is an experimental fork of 2.0.dev9 with many fixes and improvements, including:
 

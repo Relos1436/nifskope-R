@@ -55,13 +55,21 @@ Down/Left decreases.
 
 | hold | effect | block | step per tap |
 |---|---|---|---|
-| **R** | radius | `bhkCapsuleShape` | 0.0001 |
-| **L** | length, both ends | `bhkCapsuleShape` | 0.0001 per end |
-| **Shift + L** | length, `First Point` end only | `bhkCapsuleShape` | 0.0001 |
-| **Ctrl + L** | length, `Second Point` end only | `bhkCapsuleShape` | 0.0001 |
+| **R** | radius | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **L** | length, both ends | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 per end |
+| **Shift + L** | length, first end only (`First Point` / `Vertex A`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
+| **Ctrl + L** | length, second end only (`Second Point` / `Vertex B`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
-| **X / Y / Z** | translate along that axis | transform shapes, capsules, rigid bodies | 0.0001 |
-| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, rigid bodies | 0.01° |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, cylinders, rigid bodies | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, cylinders, rigid bodies | 0.01° |
+
+**Capsules and cylinders are the same shape to the nudge**: an axis between
+two end points plus a radius. Every key above works on either. They differ only
+in field names (`First Point`/`Second Point` against `Vertex A`/`Vertex B`)
+and in the cylinder storing its end points as `Vector4` — the W component
+Havok ignores is read back and written again unchanged, never zeroed. A
+cylinder also carries `Cylinder Radius` alongside the inherited `Radius`, and
+both are written together.
 
 Hold an arrow past 0.35 s and it ramps: 30 steps/s doubling every 0.6 s, capped
 at 1500 steps/s.
@@ -234,7 +242,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 7 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move, Shift+X/Y/Z rotate]
+[ACP ALPHA 8 - nudge: R radius, L len (Shift/Ctrl one end) on capsules AND cylinders, L/W/H box, X/Y/Z move, Shift+X/Y/Z rotate]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -278,6 +286,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 6 | radius moved from C to R; L lengthens a capsule |
 | ALPHA 7 | Shift+L / Ctrl+L grow one end of a capsule |
 | ALPHA 7.1 | headless CLI operations merged in from `cli-headless-ops` |
+| ALPHA 8 | every capsule key applies to `bhkCylinderShape` too |
 
 ## Not done
 

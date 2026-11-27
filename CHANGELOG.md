@@ -5,12 +5,13 @@
 Changes in this fork only. Everything below this section is upstream's changelog.
 
 * Havok collision shapes can be edited from the keyboard. Upstream's mouse-drag transforms (I/O/J/K) reject every `bhk` block in `GLView::transformItem` and do nothing on collision; this adds a keyboard route instead. Select the collision block in the Block List, hold a modifier, tap the arrow keys. Up/Right increases, Down/Left decreases:
-  * **R** — `bhkCapsuleShape` radius, writing `Radius`, `Radius 1` and `Radius 2` together, since all three must agree.
-  * **L** — `bhkCapsuleShape` length, both end points moving apart along the capsule's own axis about their midpoint, so a tilted capsule stays tilted.
-  * **Shift + L** / **Ctrl + L** — `bhkCapsuleShape` length, moving only the `First Point` or only the `Second Point` end. The midpoint shifts as a consequence; plain L exists for when it should not.
+  * **R** — `bhkCapsuleShape` or `bhkCylinderShape` radius, writing every copy the block carries (`Radius`, `Radius 1`, `Radius 2`, `Cylinder Radius`) together, since they must agree.
+  * **L** — `bhkCapsuleShape` or `bhkCylinderShape` length, both end points moving apart along the shape's own axis about their midpoint, so a tilted shape stays tilted.
+  * **Shift + L** / **Ctrl + L** — the same length, moving only the first end (`First Point` / `Vertex A`) or only the second (`Second Point` / `Vertex B`). The midpoint shifts as a consequence; plain L exists for when it should not.
   * **W / L / H** — `bhkBoxShape` `Dimensions` X / Y / Z. These are half-extents, so the box grows on both sides about its own centre.
-  * **X / Y / Z** — translate `bhkConvexTransformShape`, `bhkTransformShape`, `bhkCapsuleShape` (both end points together), `bhkRigidBodyT`, or anything else carrying a `Translation`.
+  * **X / Y / Z** — translate `bhkConvexTransformShape`, `bhkTransformShape`, `bhkCapsuleShape` and `bhkCylinderShape` (both end points together), `bhkRigidBodyT`, or anything else carrying a `Translation`.
   * **Shift + X / Y / Z** — rotate the same blocks about that axis, through the shape's own origin. The delta is multiplied into the stored rotation rather than decomposed to Euler and recomposed, so repeated taps do not drift and gimbal lock cannot break it.
+* **Cylinders are treated exactly as capsules.** Both are an axis between two end points plus a radius, so every key above applies to either. The differences are internal: the field names (`First Point`/`Second Point` against `Vertex A`/`Vertex B`), and a cylinder storing its end points as `Vector4` — the W component Havok ignores is read back and written again unchanged rather than zeroed.
 * One tap is 0.0001 for sizes and translations, 0.01 degrees for rotations, applied to the raw field value as shown in Block Details — Havok units, not world units. Holding an arrow past 0.35 s ramps the rate. Every edit is clamped so a radius, half-extent or length cannot reach zero or invert.
 * The keys are claimed application-wide through an event filter, so they work whether focus is on the Block List, Block Details or the viewport, and the Block List's type-ahead search can no longer change the selected block during an edit.
 * **Bare Z no longer triggers View → Center Viewport.** The shortcut was removed because it shadowed the Z axis key; the menu item still works. L (Left View) and W (camera forward) are *not* removed — they are taken over only while a collision block they can edit is selected, and behave normally otherwise.

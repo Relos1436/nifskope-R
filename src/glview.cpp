@@ -2129,15 +2129,24 @@ void GLView::wheelEvent( QWheelEvent * event )
 // ---------------------------------------------------------------------------
 // ACP collision nudge
 //
-// Hold C, X, Y or Z and press an arrow key to edit the Havok collision block
-// selected in the Block List.  One tap moves the RAW FIELD VALUE -- the number
-// shown in Block Details, in Havok units, not world units -- by NUDGE_STEP.
-// Holding the arrow ramps the rate up so coarse moves are still quick.
+// Hold R, L, W, H, X, Y or Z and press an arrow key to edit the Havok collision
+// block selected in the Block List.  One tap moves the RAW FIELD VALUE -- the
+// number shown in Block Details, in Havok units, not world units -- by
+// NUDGE_STEP.  Holding the arrow ramps the rate up so coarse moves are quick.
 //
-//   C        bhkCapsuleShape          radius (writes Radius, Radius 1, Radius 2)
+// Capsules and cylinders are treated alike throughout: both are an axis
+// between two end points plus a radius.  See AxisEnds, below, for the two
+// storage differences that implies.
+//
+//   R        capsule / cylinder       radius (every copy of it in the block)
+//   L        capsule / cylinder       length, both ends about the midpoint
+//   Shift+L  capsule / cylinder       length, first end only (second pinned)
+//   Ctrl+L   capsule / cylinder       length, second end only (first pinned)
+//   L/W/H    bhkBoxShape              Dimensions Y/X/Z (HALF-extents)
 //   X/Y/Z    bhkConvexTransformShape  Transform translation on that axis
-//   X/Y/Z    bhkCapsuleShape          First Point and Second Point together
+//   X/Y/Z    capsule / cylinder       both end points together
 //   X/Y/Z    bhkRigidBodyT and co.    Translation on that axis
+//   Shift+X/Y/Z                       rotate about that axis instead
 //
 // Up / Right increase, Down / Left decrease.  There is no undo, exactly as
 // with the existing mouse-drag transform -- work on copies.
@@ -2191,7 +2200,7 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 		return QOpenGLWindow::eventFilter( o, e );
 
 	// Ctrl means a menu command, so it is passed straight through -- with one
-	// exception: Ctrl+L and Ctrl+arrow while a bhkCapsuleShape is selected,
+	// exception: Ctrl+L and Ctrl+arrow while a capsule or cylinder is selected,
 	// which grow its Second Point end.  Nothing is shadowed; Ctrl+L is unused
 	// in NifSkope, whose only Ctrl bindings are Ctrl+F9, Ctrl+Alt+S and the
 	// standard Undo/Redo/Save/New/Copy/Paste.  The exception is deliberately
@@ -2199,7 +2208,8 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	if ( ke->modifiers() & Qt::ControlModifier ) {
 		bool	capsule = ( scene->nifModel && scene->currentBlock.isValid()
 		                    && scene->nifModel->blockInherits( scene->currentBlock,
-		                                                       "bhkCapsuleShape" ) );
+		                                                       { "bhkCapsuleShape",
+		                                                         "bhkCylinderShape" } ) );
 		bool	isL = ( ke->key() == Qt::Key_L );
 		bool	isArrow = ( ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down
 		                    || ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Right );
@@ -2211,7 +2221,7 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	// L / W / H are resolved here, not in convertKeyCode(), because both
 	// already mean something else: bare L is the "Left View" menu shortcut and
 	// W is camera-forward.  They are only taken over while a bhkBoxShape is
-	// selected (L also while a bhkCapsuleShape is, for its length); the rest of
+	// selected (L also while a capsule or cylinder is, for its length); the rest of
 	// the time they do their usual job.
 	switch ( ke->key() ) {
 	case Qt::Key_W:
@@ -2294,6 +2304,65 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	return true;
 }
 
+// ---------------------------------------------------------------------------
+// Capsules and cylinders are the same shape as far as the nudge is concerned:
+// an axis between two end points, plus a radius.  Every key that works on one
+// works on the other.  They differ only in two details, both handled here:
+//
+//   * field names -- "First Point"/"Second Point" against "Vertex A"/"Vertex B"
+//   * storage -- a cylinder's end points are Vector4, a capsule's are Vector3.
+//     Havok ignores the cylinder's W component, but it is READ BACK AND WRITTEN
+//     AGAIN UNCHANGED rather than zeroed, so a nudge never touches a byte it
+//     was not asked to.
+//
+// A cylinder also carries its radius in "Cylinder Radius" as well as the
+// "Radius" it inherits from bhkSphereRepShape; both are written, as with the
+// capsule's "Radius 1"/"Radius 2".
+// ---------------------------------------------------------------------------
+
+struct AxisEnds
+{
+	QModelIndex	i1, i2;
+	bool		v4 = false;		//!< end points are Vector4 (cylinder)
+
+	bool valid() const { return i1.isValid() && i2.isValid(); }
+};
+
+static AxisEnds axisEndsOf( const NifModel * nif, const QModelIndex & iBlock )
+{
+	AxisEnds	e;
+	if ( !nif )
+		return e;
+	if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+		e.i1 = nif->getIndex( iBlock, "First Point" );
+		e.i2 = nif->getIndex( iBlock, "Second Point" );
+	} else if ( nif->blockInherits( iBlock, "bhkCylinderShape" ) ) {
+		e.i1 = nif->getIndex( iBlock, "Vertex A" );
+		e.i2 = nif->getIndex( iBlock, "Vertex B" );
+		e.v4 = true;
+	}
+	return e;
+}
+
+static Vector3 axisEndGet( const NifModel * nif, const AxisEnds & e, bool second )
+{
+	const QModelIndex &	i = ( second ? e.i2 : e.i1 );
+	if ( e.v4 )
+		return Vector3( nif->get<Vector4>( i ) );
+	return nif->get<Vector3>( i );
+}
+
+static void axisEndSet( NifModel * nif, const AxisEnds & e, bool second, const Vector3 & p )
+{
+	const QModelIndex &	i = ( second ? e.i2 : e.i1 );
+	if ( e.v4 ) {
+		Vector4	v = nif->get<Vector4>( i );
+		nif->set<Vector4>( i, Vector4( p[0], p[1], p[2], v[3] ) );	// W kept
+		return;
+	}
+	nif->set<Vector3>( i, p );
+}
+
 bool GLView::nudgeWouldClaim( int k ) const
 {
 	if ( !( scene->nifModel && scene->currentBlock.isValid() ) )
@@ -2302,17 +2371,19 @@ bool GLView::nudgeWouldClaim( int k ) const
 	const QModelIndex &	iBlock = scene->currentBlock;
 	switch ( k ) {
 	case Key_CapsuleRadius:
-		return nif->blockInherits( iBlock, "bhkCapsuleShape" );
+		return nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } );
 	case Key_DimL:
-		// L is length: a box half-extent, or a capsule's end-to-end distance.
-		return nif->blockInherits( iBlock, { "bhkBoxShape", "bhkCapsuleShape" } );
+		// L is length: a box half-extent, or the end-to-end distance of a
+		// capsule or cylinder.
+		return nif->blockInherits( iBlock, { "bhkBoxShape", "bhkCapsuleShape", "bhkCylinderShape" } );
 	case Key_DimW:
 	case Key_DimH:
 		return nif->blockInherits( iBlock, "bhkBoxShape" );
 	case Key_AxisX:
 	case Key_AxisY:
 	case Key_AxisZ:
-		if ( nif->blockInherits( iBlock, { "bhkConvexTransformShape", "bhkTransformShape", "bhkCapsuleShape" } ) )
+		if ( nif->blockInherits( iBlock, { "bhkConvexTransformShape", "bhkTransformShape",
+		                                   "bhkCapsuleShape", "bhkCylinderShape" } ) )
 			return true;
 		// Shift + axis rotates: a rigid body carries a Rotation, not a Translation.
 		return nif->getIndex( iBlock, ( kbd( Key_Shift ) ? "Rotation" : "Translation" ) ).isValid();
@@ -2342,38 +2413,44 @@ bool GLView::nudgeApply( int steps )
 	QModelIndex	iBlock = scene->currentBlock;
 	float	d = float( steps ) * NUDGE_STEP;
 
-	// R: capsule radius.  A capsule stores it three times and all three must
-	// agree, or the shape renders and collides inconsistently.
-	if ( kbd( Key_CapsuleRadius ) && nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
+	// R: capsule or cylinder radius.  Both store it more than once -- a capsule
+	// as Radius/Radius 1/Radius 2, a cylinder as Radius/Cylinder Radius -- and
+	// every copy must agree, or the shape renders and collides inconsistently.
+	// Fields the block does not have are skipped, so one list serves both.
+	if ( kbd( Key_CapsuleRadius )
+	     && nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
 		QModelIndex	iR = nif->getIndex( iBlock, "Radius" );
 		if ( !iR.isValid() )
 			return false;
 		float	r = nif->get<float>( iR ) + d;
 		if ( r < NUDGE_STEP )
 			r = NUDGE_STEP;		// never let a radius reach zero or go negative
-		static const char * const	radiusFields[3] = { "Radius", "Radius 1", "Radius 2" };
-		for ( int j = 0; j < 3; j++ ) {
+		static const char * const	radiusFields[4] = {
+			"Radius", "Radius 1", "Radius 2", "Cylinder Radius"
+		};
+		for ( int j = 0; j < 4; j++ ) {
 			if ( QModelIndex i = nif->getIndex( iBlock, radiusFields[j] ); i.isValid() )
 				nif->set<float>( i, r );
 		}
 		return true;
 	}
 
-	// L on a capsule: LENGTH.  A capsule stores no length -- it is the distance
-	// between the two end points -- so the points slide along the capsule's OWN
-	// axis, never a world axis, which is what keeps a tilted capsule tilted.
+	// L on a capsule or cylinder: LENGTH.  Neither stores a length -- it is the
+	// distance between the two end points -- so the points slide along the
+	// shape's OWN axis, never a world axis, which is what keeps a tilted shape
+	// tilted.
 	//
 	//   L           both ends, symmetrically about the midpoint: NUDGE_STEP at
 	//               each end, twice that overall, exactly as the box behaves
 	//   Shift + L   the First Point end only
 	//   Ctrl  + L   the Second Point end only
-	if ( kbd( Key_DimL ) && nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
-		QModelIndex	i1 = nif->getIndex( iBlock, "First Point" );
-		QModelIndex	i2 = nif->getIndex( iBlock, "Second Point" );
-		if ( !( i1.isValid() && i2.isValid() ) )
+	if ( kbd( Key_DimL )
+	     && nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
+		AxisEnds	e = axisEndsOf( nif, iBlock );
+		if ( !e.valid() )
 			return false;
-		Vector3	p1 = nif->get<Vector3>( i1 );
-		Vector3	p2 = nif->get<Vector3>( i2 );
+		Vector3	p1 = axisEndGet( nif, e, false );
+		Vector3	p2 = axisEndGet( nif, e, true );
 		Vector3	ax = p2 - p1;
 		float	len = ax.length();
 		if ( len < 1.0e-6f )
@@ -2398,9 +2475,9 @@ bool GLView::nudgeApply( int steps )
 			if ( n < NUDGE_STEP )
 				n = NUDGE_STEP;		// never let the ends cross over
 			if ( only1 )
-				nif->set<Vector3>( i1, p2 - ax * n );
+				axisEndSet( nif, e, false, p2 - ax * n );
 			else
-				nif->set<Vector3>( i2, p1 + ax * n );
+				axisEndSet( nif, e, true, p1 + ax * n );
 			return true;
 		}
 
@@ -2408,8 +2485,8 @@ bool GLView::nudgeApply( int steps )
 		if ( h < NUDGE_STEP )
 			h = NUDGE_STEP;		// never let the two end points cross over
 		Vector3	mid = ( p1 + p2 ) / 2.0f;
-		nif->set<Vector3>( i1, mid - ax * h );
-		nif->set<Vector3>( i2, mid + ax * h );
+		axisEndSet( nif, e, false, mid - ax * h );
+		axisEndSet( nif, e, true, mid + ax * h );
 		return true;
 	}
 
@@ -2470,18 +2547,17 @@ bool GLView::nudgeApply( int steps )
 			return true;
 		}
 
-		// A capsule has no rotation of its own -- swing both end points about
-		// their midpoint, which is the same thing.
-		if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
-			QModelIndex	i1 = nif->getIndex( iBlock, "First Point" );
-			QModelIndex	i2 = nif->getIndex( iBlock, "Second Point" );
-			if ( !( i1.isValid() && i2.isValid() ) )
+		// A capsule or cylinder has no rotation of its own -- swing both end
+		// points about their midpoint, which is the same thing.
+		if ( nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
+			AxisEnds	e = axisEndsOf( nif, iBlock );
+			if ( !e.valid() )
 				return false;
-			Vector3	p1 = nif->get<Vector3>( i1 );
-			Vector3	p2 = nif->get<Vector3>( i2 );
+			Vector3	p1 = axisEndGet( nif, e, false );
+			Vector3	p2 = axisEndGet( nif, e, true );
 			Vector3	mid = ( p1 + p2 ) / 2.0f;
-			nif->set<Vector3>( i1, mid + ( rd * ( p1 - mid ) ) );
-			nif->set<Vector3>( i2, mid + ( rd * ( p2 - mid ) ) );
+			axisEndSet( nif, e, false, mid + ( rd * ( p1 - mid ) ) );
+			axisEndSet( nif, e, true, mid + ( rd * ( p2 - mid ) ) );
 			return true;
 		}
 
@@ -2508,19 +2584,18 @@ bool GLView::nudgeApply( int steps )
 		return false;
 	}
 
-	// A capsule has no transform of its own; both end points move together.
-	if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
-		bool	ok = false;
-		static const char * const	pointFields[2] = { "First Point", "Second Point" };
+	// A capsule or cylinder has no transform of its own; both end points move
+	// together.
+	if ( nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
+		AxisEnds	e = axisEndsOf( nif, iBlock );
+		if ( !e.valid() )
+			return false;
 		for ( int j = 0; j < 2; j++ ) {
-			if ( QModelIndex i = nif->getIndex( iBlock, pointFields[j] ); i.isValid() ) {
-				Vector3	v = nif->get<Vector3>( i );
-				v[(unsigned int) axis] = v[(unsigned int) axis] + d;
-				nif->set<Vector3>( i, v );
-				ok = true;
-			}
+			Vector3	v = axisEndGet( nif, e, bool( j ) );
+			v[(unsigned int) axis] = v[(unsigned int) axis] + d;
+			axisEndSet( nif, e, bool( j ), v );
 		}
-		return ok;
+		return true;
 	}
 
 	// bhkRigidBodyT and anything else carrying a plain Translation.
