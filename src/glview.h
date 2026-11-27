@@ -296,7 +296,12 @@ private:
 		// camera-forward, and both must keep working when no shape is selected.
 		Key_DimW = 30,		//!< width  -> bhkBoxShape Dimensions X
 		Key_DimL = 31,		//!< length -> bhkBoxShape Dimensions Y, or capsule end-to-end
-		Key_DimH = 32		//!< height -> bhkBoxShape Dimensions Z
+		Key_DimH = 32,		//!< height -> bhkBoxShape Dimensions Z
+		//! W pressed while a bhkCylinderShape is selected: the fourth
+		//! component of Vertex A / Vertex B, not a box width.  Which of the
+		//! two the W key means is decided in eventFilter() from the selected
+		//! block, so a box still gets Key_DimW.
+		Key_AxisW = 33
 	};
 
 	int convertKeyCode( int n ) const;

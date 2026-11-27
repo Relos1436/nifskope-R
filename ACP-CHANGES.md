@@ -60,16 +60,41 @@ Down/Left decreases.
 | **Shift + L** | length, first end only (`First Point` / `Vertex A`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **Ctrl + L** | length, second end only (`Second Point` / `Vertex B`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
-| **X / Y / Z** | translate along that axis | transform shapes, capsules, cylinders, rigid bodies | 0.0001 |
-| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, cylinders, rigid bodies | 0.01° |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, rigid bodies (cylinders below) | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, rigid bodies — **not** cylinders | 0.01° |
 
-**Capsules and cylinders are the same shape to the nudge**: an axis between
-two end points plus a radius. Every key above works on either. They differ only
-in field names (`First Point`/`Second Point` against `Vertex A`/`Vertex B`)
-and in the cylinder storing its end points as `Vector4` — the W component
-Havok ignores is read back and written again unchanged, never zeroed. A
-cylinder also carries `Cylinder Radius` alongside the inherited `Radius`, and
-both are written together.
+**Capsules and cylinders share R and L**, but not position editing. Both are an
+axis between two end points plus a radius, so the radius and length keys work on
+either; the field names differ (`First Point`/`Second Point` against
+`Vertex A`/`Vertex B`), which `AxisEnds` hides.
+
+**A cylinder's position is edited per vertex.** `Vertex A` and `Vertex B` are
+`Vector4`, and all four components are addressable:
+
+| hold | effect | field |
+|---|---|---|
+| **X / Y / Z / W** | both vertices | `Vertex A` and `Vertex B` |
+| **Shift + X / Y / Z / W** | first vertex only | `Vertex A` |
+| **Ctrl + X / Y / Z / W** | second vertex only | `Vertex B` |
+
+Three things follow from that, all deliberate:
+
+* **W is overloaded.** It is the fourth component while a cylinder is selected,
+  the box width while a `bhkBoxShape` is, and camera-forward otherwise. The
+  selected block decides, in `eventFilter()`, so neither branch has to test for
+  the other.
+* **A cylinder has no rotate key.** Shift selects a vertex here, so it cannot
+  also mean rotate. The cylinder branch in `nudgeApply()` sits before the
+  Shift-rotate branch and returns, so a cylinder never reaches it.
+* **Ctrl+X, Ctrl+Y and Ctrl+Z are shadowed while a cylinder is selected** --
+  Cut, Redo and Undo. This is the real cost of the Ctrl bindings and it is
+  accepted knowingly: the nudge has no undo of its own, so Ctrl+Z was never
+  useful mid-edit, and selecting any other block hands all three straight back.
+
+The W component is one Havok ignores on a cylinder. It is written anyway,
+because it is a real field visible in Block Details and nothing else in the
+editor steps it. Everywhere else -- X/Y/Z moves, length, rotation -- W is read
+back and written again unchanged rather than zeroed.
 
 Hold an arrow past 0.35 s and it ramps: 30 steps/s doubling every 0.6 s, capped
 at 1500 steps/s.
@@ -242,7 +267,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 8 - nudge: R radius, L len (Shift/Ctrl one end) on capsules AND cylinders, L/W/H box, X/Y/Z move, Shift+X/Y/Z rotate]
+[ACP ALPHA 9 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -287,6 +312,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 7 | Shift+L / Ctrl+L grow one end of a capsule |
 | ALPHA 7.1 | headless CLI operations merged in from `cli-headless-ops` |
 | ALPHA 8 | every capsule key applies to `bhkCylinderShape` too |
+| ALPHA 9 | cylinder position edited per vertex: X/Y/Z/W, Shift = Vertex A, Ctrl = Vertex B |
 
 ## Not done
 

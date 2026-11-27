@@ -48,10 +48,25 @@ Select the collision block in the **Block List** first, then hold a modifier and
 | **Shift + L** | length, first end only (`First Point` / `Vertex A`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **Ctrl + L** | length, second end only (`Second Point` / `Vertex B`) | `bhkCapsuleShape`, `bhkCylinderShape` | 0.0001 |
 | **W / L / H** | `Dimensions` X / Y / Z (half-extents) | `bhkBoxShape` | 0.0001 per side |
-| **X / Y / Z** | translate along that axis | transform shapes, capsules, cylinders, rigid bodies | 0.0001 |
-| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, cylinders, rigid bodies | 0.01° |
+| **X / Y / Z** | translate along that axis | transform shapes, capsules, rigid bodies (cylinders below) | 0.0001 |
+| **Shift + X / Y / Z** | rotate about that axis | transform shapes, capsules, rigid bodies — **not** cylinders | 0.01° |
 
-**Capsules and cylinders behave identically.** Both are an axis between two end points plus a radius, so every key above treats them the same way; only the field names differ (`First Point`/`Second Point` against `Vertex A`/`Vertex B`). A cylinder's end points are stored as Vector4 and their unused W component is carried through untouched.
+#### Cylinders
+
+A `bhkCylinderShape` shares **R** and **L** with a capsule, but its position is edited per vertex rather than as a whole. `Vertex A` and `Vertex B` are `Vector4`, and all four components are reachable:
+
+| hold | effect |
+|---|---|
+| **X / Y / Z / W** | that component of **both** vertices |
+| **Shift + X / Y / Z / W** | `Vertex A` only |
+| **Ctrl + X / Y / Z / W** | `Vertex B` only |
+
+**W** means the fourth component only while a cylinder is selected; with a box selected it is still the width key, and with neither it is still camera-forward.
+
+Two consequences worth knowing:
+
+* **A cylinder has no rotate key.** Shift means "Vertex A" here, so it cannot also mean "rotate". Capsules, transform shapes and rigid bodies still rotate with **Shift + X / Y / Z**.
+* **Ctrl + X, Ctrl + Y and Ctrl + Z are shadowed while a cylinder is selected** — those are Cut, Redo and Undo. They do nothing until you select a different block. Collision edits have no undo in any case.
 
 Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so a radius, half-extent or length can never reach zero or invert.
 

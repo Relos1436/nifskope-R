@@ -96,9 +96,9 @@ int main( int argc, char * argv[] )
 		a->setApplicationName( "NifSkope " + NifSkopeVersion::rawToMajMin( NIFSKOPE_VERSION ) );
 		a->setApplicationVersion( NIFSKOPE_VERSION );
 #ifdef NIFSKOPE_REVISION
-		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (build " + NIFSKOPE_REVISION + ", " + __DATE__ + ") [ACP ALPHA 8 - nudge: R radius, L len (Shift/Ctrl one end) on capsules AND cylinders, L/W/H box, X/Y/Z move, Shift+X/Y/Z rotate]" );
+		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (build " + NIFSKOPE_REVISION + ", " + __DATE__ + ") [ACP ALPHA 9 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]" );
 #else
-		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (" + __DATE__ + ") [ACP ALPHA 8 - nudge: R radius, L len (Shift/Ctrl one end) on capsules AND cylinders, L/W/H box, X/Y/Z move, Shift+X/Y/Z rotate]" );
+		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (" + __DATE__ + ") [ACP ALPHA 9 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]" );
 #endif
 
 		// Must set current directory or this causes issues with several features

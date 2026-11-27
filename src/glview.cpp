@@ -2138,15 +2138,23 @@ void GLView::wheelEvent( QWheelEvent * event )
 // between two end points plus a radius.  See AxisEnds, below, for the two
 // storage differences that implies.
 //
-//   R        capsule / cylinder       radius (every copy of it in the block)
-//   L        capsule / cylinder       length, both ends about the midpoint
-//   Shift+L  capsule / cylinder       length, first end only (second pinned)
-//   Ctrl+L   capsule / cylinder       length, second end only (first pinned)
-//   L/W/H    bhkBoxShape              Dimensions Y/X/Z (HALF-extents)
-//   X/Y/Z    bhkConvexTransformShape  Transform translation on that axis
-//   X/Y/Z    capsule / cylinder       both end points together
-//   X/Y/Z    bhkRigidBodyT and co.    Translation on that axis
-//   Shift+X/Y/Z                       rotate about that axis instead
+//   R          capsule / cylinder       radius (every copy of it in the block)
+//   L          capsule / cylinder       length, both ends about the midpoint
+//   Shift+L    capsule / cylinder       length, first end only (second pinned)
+//   Ctrl+L     capsule / cylinder       length, second end only (first pinned)
+//   L/W/H      bhkBoxShape              Dimensions Y/X/Z (HALF-extents)
+//   X/Y/Z      bhkConvexTransformShape  Transform translation on that axis
+//   X/Y/Z      bhkCapsuleShape          both end points together
+//   X/Y/Z      bhkRigidBodyT and co.    Translation on that axis
+//   Shift+X/Y/Z                         rotate about that axis instead
+//
+// A CYLINDER is the exception: its Vertex A / Vertex B are Vector4, and each
+// component is edited directly, so Shift and Ctrl pick a vertex rather than
+// meaning "rotate".  A cylinder has no rotate key.
+//
+//   X/Y/Z/W          bhkCylinderShape   that component of BOTH vertices
+//   Shift+X/Y/Z/W    bhkCylinderShape   Vertex A only
+//   Ctrl+X/Y/Z/W     bhkCylinderShape   Vertex B only
 //
 // Up / Right increase, Down / Left decrease.  There is no undo, exactly as
 // with the existing mouse-drag transform -- work on copies.
@@ -2165,8 +2173,8 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	if ( t == QEvent::ApplicationDeactivate || t == QEvent::WindowDeactivate ) {
 		kbdState = kbdState & ~( ( 1ULL << Key_CapsuleRadius ) | ( 1ULL << Key_AxisX )
 		                         | ( 1ULL << Key_AxisY ) | ( 1ULL << Key_AxisZ )
-		                         | ( 1ULL << Key_DimW ) | ( 1ULL << Key_DimL )
-		                         | ( 1ULL << Key_DimH ) );
+		                         | ( 1ULL << Key_AxisW ) | ( 1ULL << Key_DimW )
+		                         | ( 1ULL << Key_DimL ) | ( 1ULL << Key_DimH ) );
 		nudgeDir = 0;
 		nudgeCtrl = false;
 		return QOpenGLWindow::eventFilter( o, e );
@@ -2199,21 +2207,34 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	if ( ke->modifiers() & Qt::AltModifier )
 		return QOpenGLWindow::eventFilter( o, e );
 
-	// Ctrl means a menu command, so it is passed straight through -- with one
-	// exception: Ctrl+L and Ctrl+arrow while a capsule or cylinder is selected,
-	// which grow its Second Point end.  Nothing is shadowed; Ctrl+L is unused
-	// in NifSkope, whose only Ctrl bindings are Ctrl+F9, Ctrl+Alt+S and the
-	// standard Undo/Redo/Save/New/Copy/Paste.  The exception is deliberately
-	// NOT extended to a box: Ctrl+L there would silently act like plain L.
+	bool	twoPoint = ( scene->nifModel && scene->currentBlock.isValid()
+	                     && scene->nifModel->blockInherits( scene->currentBlock,
+	                                                        { "bhkCapsuleShape",
+	                                                          "bhkCylinderShape" } ) );
+	bool	cylinder = ( scene->nifModel && scene->currentBlock.isValid()
+	                     && scene->nifModel->blockInherits( scene->currentBlock,
+	                                                        "bhkCylinderShape" ) );
+
+	// Ctrl means a menu command, so it is passed straight through -- with two
+	// exceptions, both only while the block they apply to is selected:
+	//
+	//   Ctrl+L                 capsule or cylinder, grows the second end
+	//   Ctrl+X / Y / Z / W     cylinder, moves Vertex B alone
+	//
+	// Ctrl+L is free in NifSkope.  CTRL+X, CTRL+Y AND CTRL+Z ARE NOT -- they
+	// are Cut, Redo and Undo.  While a cylinder is selected those three are
+	// shadowed and do nothing; selecting any other block hands them straight
+	// back.  That is the price of the per-vertex keys, and is deliberate: the
+	// nudge has no undo of its own, so Ctrl+Z was never useful mid-edit.
+	// The exception is NOT extended to a box, where Ctrl+L would silently act
+	// like plain L.
 	if ( ke->modifiers() & Qt::ControlModifier ) {
-		bool	capsule = ( scene->nifModel && scene->currentBlock.isValid()
-		                    && scene->nifModel->blockInherits( scene->currentBlock,
-		                                                       { "bhkCapsuleShape",
-		                                                         "bhkCylinderShape" } ) );
 		bool	isL = ( ke->key() == Qt::Key_L );
+		bool	isVert = ( cylinder && ( ke->key() == Qt::Key_X || ke->key() == Qt::Key_Y
+		                                 || ke->key() == Qt::Key_Z || ke->key() == Qt::Key_W ) );
 		bool	isArrow = ( ke->key() == Qt::Key_Up || ke->key() == Qt::Key_Down
 		                    || ke->key() == Qt::Key_Left || ke->key() == Qt::Key_Right );
-		if ( !( capsule && ( isL || ( isArrow && nudgeActive() ) ) ) )
+		if ( !( isVert || ( twoPoint && ( isL || ( isArrow && nudgeActive() ) ) ) ) )
 			return QOpenGLWindow::eventFilter( o, e );
 	}
 
@@ -2223,9 +2244,13 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	// W is camera-forward.  They are only taken over while a bhkBoxShape is
 	// selected (L also while a capsule or cylinder is, for its length); the rest of
 	// the time they do their usual job.
+	//
+	// W is the one key that means two different things to the nudge itself: a
+	// box's width, or a cylinder vertex's fourth component.  The selected
+	// block decides, here, so neither case has to test for the other later.
 	switch ( ke->key() ) {
 	case Qt::Key_W:
-		k = Key_DimW;
+		k = ( cylinder ? Key_AxisW : Key_DimW );
 		break;
 	case Qt::Key_L:
 		k = Key_DimL;
@@ -2242,7 +2267,8 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	// arrives as an ordinary KeyPress instead.  This is what lets L serve both
 	// purposes; the Z key was handled earlier by deleting its shortcut outright.
 	if ( t == QEvent::ShortcutOverride ) {
-		if ( ( k == Key_DimW || k == Key_DimL || k == Key_DimH ) && nudgeWouldClaim( k ) ) {
+		if ( ( k == Key_DimW || k == Key_DimL || k == Key_DimH || k == Key_AxisW )
+		     && nudgeWouldClaim( k ) ) {
 			e->accept();
 			return true;
 		}
@@ -2255,7 +2281,7 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 	// a block the nudge can actually edit is selected, so type-ahead search in
 	// the Block List still works the rest of the time.
 	if ( k == Key_CapsuleRadius || k == Key_AxisX || k == Key_AxisY || k == Key_AxisZ
-	     || k == Key_DimW || k == Key_DimL || k == Key_DimH ) {
+	     || k == Key_AxisW || k == Key_DimW || k == Key_DimL || k == Key_DimH ) {
 		if ( press ) {
 			if ( !nudgeWouldClaim( k ) )
 				return QOpenGLWindow::eventFilter( o, e );
@@ -2379,6 +2405,9 @@ bool GLView::nudgeWouldClaim( int k ) const
 	case Key_DimW:
 	case Key_DimH:
 		return nif->blockInherits( iBlock, "bhkBoxShape" );
+	case Key_AxisW:
+		// The fourth component exists only on a cylinder's Vertex A / Vertex B.
+		return nif->blockInherits( iBlock, "bhkCylinderShape" );
 	case Key_AxisX:
 	case Key_AxisY:
 	case Key_AxisZ:
@@ -2393,10 +2422,11 @@ bool GLView::nudgeWouldClaim( int k ) const
 
 bool GLView::nudgeActive() const
 {
-	static const int	modifiers[7] = {
-		Key_CapsuleRadius, Key_AxisX, Key_AxisY, Key_AxisZ, Key_DimW, Key_DimL, Key_DimH
+	static const int	modifiers[8] = {
+		Key_CapsuleRadius, Key_AxisX, Key_AxisY, Key_AxisZ, Key_AxisW,
+		Key_DimW, Key_DimL, Key_DimH
 	};
-	for ( int i = 0; i < 7; i++ ) {
+	for ( int i = 0; i < 8; i++ ) {
 		if ( kbd( modifiers[i] ) && nudgeWouldClaim( modifiers[i] ) )
 			return true;
 	}
@@ -2510,9 +2540,47 @@ bool GLView::nudgeApply( int steps )
 		return true;
 	}
 
-	int	axis = ( kbd( Key_AxisX ) ? 0 : ( kbd( Key_AxisY ) ? 1 : ( kbd( Key_AxisZ ) ? 2 : -1 ) ) );
+	int	axis = ( kbd( Key_AxisX ) ? 0 : ( kbd( Key_AxisY ) ? 1
+	             : ( kbd( Key_AxisZ ) ? 2 : ( kbd( Key_AxisW ) ? 3 : -1 ) ) ) );
 	if ( axis < 0 )
 		return false;
+
+	// -------------------------------------------------------------------
+	// A CYLINDER is edited per vertex, not as a whole.  Its Vertex A and
+	// Vertex B are Vector4, and all four components are addressable:
+	//
+	//   X / Y / Z / W           both vertices move together
+	//   Shift + X / Y / Z / W   Vertex A only
+	//   Ctrl  + X / Y / Z / W   Vertex B only
+	//
+	// This branch sits BEFORE the Shift-rotate branch below, and returns, so
+	// a cylinder never reaches it: Shift on a cylinder means "Vertex A", not
+	// "rotate".  Capsules and transform shapes still rotate with Shift.
+	// Holding Shift and Ctrl together is ambiguous and does nothing.
+	//
+	// W is written like any other component.  Havok ignores it, but it is a
+	// real field the user can see in Block Details, and nothing else in the
+	// editor offers a way to step it.
+	// -------------------------------------------------------------------
+	if ( nif->blockInherits( iBlock, "bhkCylinderShape" ) ) {
+		QModelIndex	iA = nif->getIndex( iBlock, "Vertex A" );
+		QModelIndex	iB = nif->getIndex( iBlock, "Vertex B" );
+		if ( !( iA.isValid() && iB.isValid() ) )
+			return false;
+		bool	onlyA = kbd( Key_Shift );
+		bool	onlyB = nudgeCtrl;
+		if ( onlyA && onlyB )
+			return false;
+		for ( int j = 0; j < 2; j++ ) {
+			if ( ( j == 0 && onlyB ) || ( j == 1 && onlyA ) )
+				continue;
+			const QModelIndex &	i = ( j == 0 ? iA : iB );
+			Vector4	v = nif->get<Vector4>( i );
+			v[(unsigned int) axis] = v[(unsigned int) axis] + d;
+			nif->set<Vector4>( i, v );
+		}
+		return true;
+	}
 
 	// -------------------------------------------------------------------
 	// Shift + X/Y/Z: ROTATE about that axis, through the shape's own origin.
@@ -2547,9 +2615,10 @@ bool GLView::nudgeApply( int steps )
 			return true;
 		}
 
-		// A capsule or cylinder has no rotation of its own -- swing both end
-		// points about their midpoint, which is the same thing.
-		if ( nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
+		// A capsule has no rotation of its own -- swing both end points about
+		// their midpoint, which is the same thing.  A cylinder never gets here:
+		// it returned above, where Shift means "Vertex A only" instead.
+		if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
 			AxisEnds	e = axisEndsOf( nif, iBlock );
 			if ( !e.valid() )
 				return false;
@@ -2584,9 +2653,9 @@ bool GLView::nudgeApply( int steps )
 		return false;
 	}
 
-	// A capsule or cylinder has no transform of its own; both end points move
-	// together.
-	if ( nif->blockInherits( iBlock, { "bhkCapsuleShape", "bhkCylinderShape" } ) ) {
+	// A capsule has no transform of its own; both end points move together.
+	// A cylinder never gets here -- it is handled per vertex, above.
+	if ( nif->blockInherits( iBlock, "bhkCapsuleShape" ) ) {
 		AxisEnds	e = axisEndsOf( nif, iBlock );
 		if ( !e.valid() )
 			return false;
