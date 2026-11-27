@@ -267,7 +267,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 9 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]
+[ACP ALPHA 9.1 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Ctrl=B)]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -313,6 +313,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 7.1 | headless CLI operations merged in from `cli-headless-ops` |
 | ALPHA 8 | every capsule key applies to `bhkCylinderShape` too |
 | ALPHA 9 | cylinder position edited per vertex: X/Y/Z/W, Shift = Vertex A, Ctrl = Vertex B |
+| ALPHA 9.1 | fixed the camera spinning on after a nudge: claimed arrows no longer share the camera's rotate bits |
 
 ## Not done
 

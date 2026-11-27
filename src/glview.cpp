@@ -2175,6 +2175,7 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 		                         | ( 1ULL << Key_AxisY ) | ( 1ULL << Key_AxisZ )
 		                         | ( 1ULL << Key_AxisW ) | ( 1ULL << Key_DimW )
 		                         | ( 1ULL << Key_DimL ) | ( 1ULL << Key_DimH ) );
+		nudgeArrows = 0;
 		nudgeDir = 0;
 		nudgeCtrl = false;
 		return QOpenGLWindow::eventFilter( o, e );
@@ -2309,23 +2310,55 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 		return QOpenGLWindow::eventFilter( o, e );
 	}
 
-	if ( !( k == Key_RotateUp || k == Key_RotateDown
-	        || k == Key_RotateLeft || k == Key_RotateRight ) )
+	// -------------------------------------------------------------------
+	// Arrow keys.  A claimed arrow is recorded in nudgeArrows, NOT in
+	// kbdState's Key_Rotate* bits.
+	//
+	// Those bits drive the CAMERA, and sharing them was a bug: let go of the
+	// modifier before the arrow and nudgeActive() went false, so the release
+	// hit the early return below and never cleared the bit.  With the Block
+	// List focused, GLView::keyReleaseEvent never runs either, so nothing
+	// else cleared it -- and updateAnimationTime(), no longer suppressed,
+	// span the camera every frame until some unrelated key event happened to
+	// clear the bit.  That is the "screen keeps rotating until I press
+	// something" fault.
+	//
+	// A private mask cannot get stuck that way: the release clears it no
+	// matter what the modifiers are doing, and the camera never sees a key
+	// it was not given.
+	// -------------------------------------------------------------------
+	int	arrow = ( k == Key_RotateUp ? 0 : ( k == Key_RotateDown ? 1
+	              : ( k == Key_RotateLeft ? 2 : ( k == Key_RotateRight ? 3 : -1 ) ) ) );
+	if ( arrow < 0 )
 		return QOpenGLWindow::eventFilter( o, e );
+	unsigned int	bit = 1u << (unsigned int) arrow;
+
+	if ( !press ) {
+		// Only swallow a release whose press was ours; anything else is the
+		// camera's and must pass through untouched.
+		if ( !( nudgeArrows & bit ) )
+			return QOpenGLWindow::eventFilter( o, e );
+		if ( !ke->isAutoRepeat() ) {
+			nudgeArrows = nudgeArrows & ~bit;
+			if ( !nudgeArrows ) {
+				nudgeDir = 0;
+				nudgeHeld = 0.0f;
+				nudgeAccum = 0.0f;
+			}
+		}
+		return true;
+	}
+
 	if ( !nudgeActive() )
 		return QOpenGLWindow::eventFilter( o, e );
 
 	// The arrow belongs to the nudge now, whichever widget has focus.
-	if ( press ) {
-		kbdState = kbdState | ( 1ULL << k );
-		if ( !ke->isAutoRepeat() ) {
-			nudgeDir = ( k == Key_RotateUp || k == Key_RotateRight ? 1 : -1 );
-			nudgeHeld = 0.0f;
-			nudgeAccum = 0.0f;
-			nudgeApply( nudgeDir );
-		}
-	} else if ( !ke->isAutoRepeat() ) {
-		kbdState = kbdState & ~( 1ULL << k );
+	nudgeArrows = nudgeArrows | bit;
+	if ( !ke->isAutoRepeat() ) {
+		nudgeDir = ( arrow == 0 || arrow == 3 ? 1 : -1 );
+		nudgeHeld = 0.0f;
+		nudgeAccum = 0.0f;
+		nudgeApply( nudgeDir );
 	}
 	return true;
 }
@@ -2679,10 +2712,11 @@ bool GLView::nudgeApply( int steps )
 
 bool GLView::nudgeTick( float dT )
 {
+	// Read the nudge's own arrow mask, not the camera's rotate bits.
 	int	dir = 0;
-	if ( kbd( Key_RotateUp ) || kbd( Key_RotateRight ) )
+	if ( nudgeArrows & ( ( 1u << 0 ) | ( 1u << 3 ) ) )	// Up, Right
 		dir += 1;
-	if ( kbd( Key_RotateDown ) || kbd( Key_RotateLeft ) )
+	if ( nudgeArrows & ( ( 1u << 1 ) | ( 1u << 2 ) ) )	// Down, Left
 		dir -= 1;
 
 	if ( dir == 0 || !nudgeActive() ) {

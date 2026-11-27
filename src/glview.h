@@ -315,6 +315,11 @@ private:
 	//! Shift + axis rotates instead of translating; one tap is this many DEGREES.
 	static constexpr float NUDGE_ROT_STEP = 0.01f;
 	int nudgeDir = 0;
+	//! Arrow keys the nudge has claimed: bit 0 Up, 1 Down, 2 Left, 3 Right.
+	//! Deliberately NOT the Key_Rotate* bits in kbdState -- those drive the
+	//! camera, and sharing them let a half-released combination leave the
+	//! camera spinning.  See the arrow block in eventFilter().
+	unsigned int nudgeArrows = 0;
 	//! Ctrl is held.  Read from events, not kbdState: nudgeTick() runs on
 	//! frames and has no event to ask.  Ctrl+L grows a capsule's Second Point
 	//! end, as Shift+L grows its First Point end.
