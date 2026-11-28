@@ -17,7 +17,7 @@ NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF
 
 ## NifSkope R — collision editing and headless NIF commands
 
-**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
+**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, a right-click conversion from `bhkCylinderShape` to a convex hull, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
 
 Branches:
 
@@ -72,6 +72,29 @@ Holding an arrow past 0.35 s ramps the rate, up to a cap. Every edit clamps, so 
 
 The step applies to the **raw field value as shown in Block Details**, not to world units — those fields are Havok units, 1/69.99125 of world scale. Editing the displayed number directly means there is no conversion to get wrong.
 
+#### Converting a cylinder to a convex hull
+
+Bethesda's games do not use `bhkCylinderShape`, so a cylinder makes a good editing guide but is not safe to ship. Position one with the keys above, then **right-click the block → Havok → Convert Cylinder to Convex Hull**. A `bhkConvexVerticesShape` of the same axis, length and diameter takes its place, and the cylinder block is deleted.
+
+| setting | default | range |
+|---|---|---|
+| **Sides** | 16 | 6–64 |
+| **Collision Radius** | 0.001 | 0.0–0.5 |
+
+Both are remembered between runs under `Spells/Havok/Convert Cylinder to Convex Hull`. They are global rather than per file — change `Sides` for one weapon and it stays changed for the next.
+
+What it does:
+
+* The ring is **circumscribed**, not inscribed, so every facet sits on or outside the cylinder's surface. The overshoot is `1/cos(π/sides)`: 3.5% at 12 sides, 2.0% at 16, 0.9% at 24. Collision inside the visible weapon is collision the player never feels in VR, so erring outward is the point.
+* The hull is built analytically rather than through Qhull. A cylinder's hull is two regular polygons, so there is nothing for a solver to discover, and the vertex order stays deterministic.
+* `2 × sides` vertices and `sides + 2` half spaces, both written lexicographically sorted as vanilla files have them.
+* Half spaces carry an outward normal and a **positive** support distance, less the shell radius — the convention both `Create Convex Shapes` and the ACP toolkit use. `nif.xml` describes that fourth component as minus the dot product; neither implementation writes it that way.
+* The **material is copied from the cylinder**, never defaulted. It is a per-weapon choice.
+* Every reference to the cylinder is repointed in a single pass, so a rigid body's `Shape`, a `bhkConvexTransformShape` wrapper and an entry in a `bhkListShape`'s `Sub Shapes` array are all handled without special cases. The surrounding collision hierarchy and transforms are untouched.
+* It refuses rather than writing a broken shape when the cylinder has no length or no radius, or when the collision radius is too large for the shape to survive being shrunk by it.
+
+**There is no undo.** NifSkope's undo stack covers values typed into Block Details, not spells that insert and remove blocks. Close without saving to back out. Conversion is also the last edit you can make to that shape, since the nudge keys cannot move a hull as a unit.
+
 ### Headless mode — editing NIFs with no window open
 
 Normally NifSkope is something you click in: open a mesh, find a block, change fields, save. **Headless mode** runs the same program with `--no-gui` plus a command, so it opens the file, applies one operation, saves it and exits. Nothing appears on screen.
@@ -111,6 +134,7 @@ Upstream's own fourteen cover bounds, tangent spaces, index optimisation, duplic
 | `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
 | `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration |
 | `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
+| `src/spells/havok.cpp` | `Convert Cylinder to Convex Hull`, the right-click spell that bakes a positioned `bhkCylinderShape` into a `bhkConvexVerticesShape` |
 | `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 

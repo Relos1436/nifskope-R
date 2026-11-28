@@ -23,6 +23,8 @@
 #include <QSettings>
 #include <QSpinBox>
 
+#include <algorithm>
+
 // Brief description is deliberately not autolinked to class Spell
 /*! \file havok.cpp
  * \brief Havok spells
@@ -944,6 +946,225 @@ bool spCreateCVS::settingsDialog( CoACD & coacd, float & precision, float & radi
 }
 
 REGISTER_SPELL( spCreateCVS )
+
+
+//! Converts a bhkCylinderShape into an equivalent bhkConvexVerticesShape
+//!
+//! A cylinder is easy to place by hand -- two end points and a radius, every
+//! one of them nudgeable -- but Bethesda's games do not use bhkCylinderShape,
+//! so one is not safe to ship.  This bakes the cylinder that was positioned
+//! on screen into a convex hull that is.
+//!
+//! The hull is built analytically rather than through Qhull.  The convex hull
+//! of a cylinder is just two regular polygons, so there is nothing for a hull
+//! solver to discover, and skipping it keeps the vertex order deterministic
+//! and sidesteps Qhull's roundoff behaviour at coarse precisions.
+//!
+//! The ring is CIRCUMSCRIBED about the cylinder rather than inscribed.  An
+//! inscribed ring would put every facet inside the shape that was positioned
+//! on screen, and collision sitting inside the visible weapon is collision the
+//! player never feels in VR.
+class spCylinderToConvexHull final : public Spell
+{
+public:
+	QString name() const override final { return Spell::tr( "Convert Cylinder to Convex Hull" ); }
+	QString page() const override final { return Spell::tr( "Havok" ); }
+
+	bool isApplicable( const NifModel * nif, const QModelIndex & index ) override final
+	{
+		return nif && nif->isNiBlock( index, "bhkCylinderShape" );
+	}
+
+	//! Side count and shell radius, remembered between runs under
+	//! Spells/Havok/Convert Cylinder to Convex Hull.
+	static bool settingsDialog( int & sides, float & radius );
+
+	QModelIndex cast( NifModel * nif, const QModelIndex & iBlock ) override final;
+};
+
+bool spCylinderToConvexHull::settingsDialog( int & sides, float & radius )
+{
+	{
+		QSettings	settings;
+		settings.beginGroup( "Spells/Havok/Convert Cylinder to Convex Hull" );
+		sides = settings.value( "Sides", 16 ).toInt();
+		radius = settings.value( "Radius", 0.001f ).toFloat();
+		settings.endGroup();
+	}
+
+	QDialog	dlg;
+	dlg.setWindowTitle( Spell::tr( "Convert Cylinder to Convex Hull" ) );
+	QVBoxLayout *	vbox = new QVBoxLayout;
+	dlg.setLayout( vbox );
+
+	spCreateCVS::addLabel( vbox, Spell::tr( "The hull is circumscribed about the cylinder, so it encloses" ) );
+	spCreateCVS::addLabel( vbox, Spell::tr( "the shape you positioned instead of cutting inside it." ) );
+
+	auto	spnSides = spCreateCVS::addSpinBox( vbox, Spell::tr( "Sides" ), sides, 6, 64 );
+	auto	spnRadius = spCreateCVS::addSpinBox( vbox, Spell::tr( "Collision Radius (in Havok units)" ),
+												 double( radius ), 0.0, 0.5, 4 );
+
+	spCreateCVS::addLabel( vbox, QString() );
+
+	QHBoxLayout *	hbox = new QHBoxLayout;
+	vbox->addLayout( hbox );
+
+	QPushButton *	ok = new QPushButton;
+	ok->setText( Spell::tr( "Ok" ) );
+	hbox->addWidget( ok );
+
+	QPushButton *	cancel = new QPushButton;
+	cancel->setText( Spell::tr( "Cancel" ) );
+	hbox->addWidget( cancel );
+
+	QObject::connect( ok, &QPushButton::clicked, &dlg, &QDialog::accept );
+	QObject::connect( cancel, &QPushButton::clicked, &dlg, &QDialog::reject );
+
+	if ( dlg.exec() != QDialog::Accepted )
+		return false;
+
+	sides = spnSides->value();
+	radius = float( spnRadius->value() );
+
+	QSettings	settings;
+	settings.beginGroup( "Spells/Havok/Convert Cylinder to Convex Hull" );
+	settings.setValue( "Sides", QVariant( sides ) );
+	settings.setValue( "Radius", QVariant( radius ) );
+	settings.endGroup();
+
+	return true;
+}
+
+QModelIndex spCylinderToConvexHull::cast( NifModel * nif, const QModelIndex & iBlock )
+{
+	QPersistentModelIndex	iShape( iBlock );
+	if ( !iShape.isValid() )
+		return {};
+
+	// Vertex A, Vertex B and Cylinder Radius are already in Havok units, and so
+	// are a bhkConvexVerticesShape's vertices, so nothing is scaled here.  The
+	// fourth component of Vertex A / Vertex B is not part of the shape -- the
+	// renderer ignores it -- so it is not carried over.
+	Vector3	ptA( nif->get<Vector4>( iShape, "Vertex A" ) );
+	Vector3	ptB( nif->get<Vector4>( iShape, "Vertex B" ) );
+	float	cylRadius = nif->get<float>( iShape, "Cylinder Radius" );
+
+	Vector3	axis = ptB - ptA;
+	float	len = axis.length();
+
+	if ( len < 0.000001f || cylRadius <= 0.0f ) {
+		QMessageBox::warning( nullptr, "NifSkope",
+			Spell::tr( "This cylinder has no length or no radius, so there is nothing to convert." ) );
+		return {};
+	}
+
+	int	sides = 16;
+	float	radius = 0.001f;
+
+	if ( !settingsDialog( sides, radius ) )
+		return {};
+
+	// Havok inflates a convex shape by its radius, so the half spaces are
+	// pulled in by that much -- the same convention Create Convex Shapes uses.
+	// Pulled in further than the shape is thick, it collapses or turns inside
+	// out, with nothing on screen to say so.
+	float	inradius = ( cylRadius < len * 0.5f ? cylRadius : len * 0.5f );
+
+	if ( radius >= inradius * 0.9f ) {
+		QMessageBox::warning( nullptr, "NifSkope",
+			Spell::tr( "A collision radius of %1 is too large for this cylinder. It is only %2 Havok units"
+					   " across at its narrowest, so shrinking the half spaces by that much would collapse"
+					   " it. Use at most %3, or 0." )
+				.arg( double( radius ) ).arg( double( inradius ) ).arg( double( inradius * 0.9f ) ) );
+		return {};
+	}
+
+	// An orthonormal frame around the cylinder's axis.
+	Vector3	u = axis;
+	u.normalize();
+
+	Vector3	t( 1.0f, 0.0f, 0.0f );
+	if ( fabsf( Vector3::dotproduct( u, t ) ) > 0.9f )
+		t = Vector3( 0.0f, 1.0f, 0.0f );
+
+	Vector3	e1 = Vector3::crossproduct( u, t );
+	e1.normalize();
+	Vector3	e2 = Vector3::crossproduct( u, e1 );
+
+	double	step = 2.0 * PI / double( sides );
+	// Circumscribed: each face is tangent to the cylinder at its midpoint, so
+	// the ring's corners sit further out than the cylinder's surface, never in.
+	float	ringRadius = cylRadius / float( cos( step * 0.5 ) );
+
+	QVector<Vector4>	verts;
+	QVector<Vector4>	norms;
+	verts.reserve( sides * 2 );
+	norms.reserve( sides + 2 );
+
+	for ( int i = 0; i < sides; i++ ) {
+		Vector3	p = e1 * float( cos( step * i ) ) + e2 * float( sin( step * i ) );
+		Vector3	va = ptA + p * ringRadius;
+		Vector3	vb = ptB + p * ringRadius;
+		verts.append( Vector4( va[0], va[1], va[2], 0.0f ) );
+		verts.append( Vector4( vb[0], vb[1], vb[2], 0.0f ) );
+
+		// The side plane spanning vertices i and i+1 is tangent to the
+		// cylinder, so its support distance is exactly the cylinder radius.
+		// The stored w is that distance less the shell radius: outward normal,
+		// positive support, as both Create Convex Shapes and the Accurate
+		// Collision Project toolkit write it.  The XML comment describing w as
+		// minus the dot product does not match what either one produces.
+		Vector3	n = e1 * float( cos( step * ( double( i ) + 0.5 ) ) )
+					+ e2 * float( sin( step * ( double( i ) + 0.5 ) ) );
+		norms.append( Vector4( n[0], n[1], n[2],
+							   Vector3::dotproduct( n, ptA ) + cylRadius - radius ) );
+	}
+
+	// The two flat caps.
+	norms.append( Vector4( u[0], u[1], u[2], Vector3::dotproduct( u, ptB ) - radius ) );
+	norms.append( Vector4( -u[0], -u[1], -u[2], -Vector3::dotproduct( u, ptA ) - radius ) );
+
+	// Vanilla files keep both arrays lexicographically sorted.  Neither is
+	// indexed by anything else, so reordering them is free.
+	std::sort( verts.begin(), verts.end() );
+	std::sort( norms.begin(), norms.end() );
+
+	QPersistentModelIndex	iCVS = nif->insertNiBlock( "bhkConvexVerticesShape" );
+	if ( !iCVS.isValid() )
+		return {};
+
+	nif->set<uint>( iCVS, "Num Vertices", uint( verts.count() ) );
+	nif->updateArraySize( iCVS, "Vertices" );
+	nif->setArray<Vector4>( iCVS, "Vertices", verts );
+
+	nif->set<uint>( iCVS, "Num Normals", uint( norms.count() ) );
+	nif->updateArraySize( iCVS, "Normals" );
+	nif->setArray<Vector4>( iCVS, "Normals", norms );
+
+	nif->set<float>( iCVS, "Radius", radius );
+
+	// The material is the cylinder's own, never a default: it is picked per
+	// weapon, and a default here is how a dagger material ends up on an axe.
+	NifValue	material = nif->getValue( nif->getIndex( iShape, "Material" ) );
+	if ( material.isValid() )
+		nif->setItemValue( nif->getItem( iCVS, "Material" ), material );
+
+	// Repoint every reference to the cylinder at the hull in one pass, so a
+	// rigid body's Shape, a bhkConvexTransformShape wrapper and an entry in a
+	// bhkListShape's Sub Shapes array are all handled without being special
+	// cased, and a cylinder referenced twice does not leave a dangling link.
+	// removeNiBlock then shifts the remaining block numbers down for us.
+	int	oldNum = nif->getBlockNumber( iShape );
+	QMap<qint32, qint32>	map;
+	map.insert( oldNum, nif->getBlockNumber( iCVS ) );
+	nif->mapLinks( map );
+
+	nif->removeNiBlock( oldNum );
+
+	return QModelIndex( iCVS );
+}
+
+REGISTER_SPELL( spCylinderToConvexHull )
 
 
 //! Transforms Havok constraints

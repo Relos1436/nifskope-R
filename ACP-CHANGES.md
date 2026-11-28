@@ -3,11 +3,14 @@
 A fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched
 from `develop` at `3797c89` (build of Nov 16 2026).
 
-It adds two things:
+It adds three things:
 
 1. **Havok collision shapes can be edited from the keyboard**, in small exact
    steps, without leaving NifSkope.
-2. **Three headless command-line operations**, for editing meshes with no
+2. **A `bhkCylinderShape` can be baked into a convex hull** from the
+   right-click menu, so a cylinder can be used as an editing guide and
+   still ship as something the engine supports.
+3. **Three headless command-line operations**, for editing meshes with no
    window open.
 
 Nothing else is changed. No upstream behaviour is removed except one menu
@@ -169,6 +172,90 @@ get wrong: what you see change is exactly what the key moved.
 Every edit clamps, so a radius, half-extent or length can never reach zero or
 invert.
 
+## Converting a cylinder to a convex hull
+
+`bhkCylinderShape` is easy to place by hand — two end points and a radius,
+every one of them nudgeable — but Bethesda's games do not use it, so a
+cylinder is a good editing guide and a bad thing to ship. **Convert Cylinder to
+Convex Hull**, on the Havok page of the right-click menu, bakes the cylinder
+that was positioned on screen into a `bhkConvexVerticesShape` and deletes it.
+
+It is registered as an ordinary spell, so it appears in the context menu of
+both the Block List and the viewport with no extra wiring, and
+`isApplicable` returns true only for an exact `bhkCylinderShape`.
+
+Two settings are remembered under `Spells/Havok/Convert Cylinder to Convex
+Hull`: `Sides` (default 16, range 6–64) and `Radius` (default 0.001, the ACP
+house value for hulls — NifSkope's own default of 0.05 is 3.5 Skyrim units,
+larger than many whole weapons). They are global, not per file.
+
+### Decisions worth recording
+
+**Analytic, not Qhull.** `spCreateCVS` routes mesh vertices through
+`compute_convex_hull()`. A cylinder needs none of that: its hull is two regular
+polygons. Generating it directly keeps the vertex order deterministic and
+avoids Qhull's roundoff behaviour at coarse precisions, which has produced bad
+hulls in this project before.
+
+**Circumscribed, not inscribed.** The ring radius is
+`Cylinder Radius / cos(π/sides)`, so each face is tangent to the cylinder at its
+midpoint and the corners sit outside it. An inscribed ring would put every
+facet *inside* the shape that was positioned on screen, and in VR collision
+inside the visible weapon is collision the player never feels.
+
+**Nothing is scaled.** `Vertex A`, `Vertex B` and `Cylinder Radius` are already
+in Havok units, and so are a `bhkConvexVerticesShape`'s vertices. There is no
+conversion, and therefore no conversion to get wrong.
+
+**The W component of `Vertex A` / `Vertex B` is dropped.** `drawCylinder` reads
+only the first three components, so W is not part of the shape being
+positioned. It is editable with the W key because the field is there, not
+because it means anything here.
+
+**Half-space convention.** Outward normal, and a *positive* support distance
+with the shell radius subtracted:
+
+```
+w = dot( n, v ) - Radius
+```
+
+This matches `spCreateCVS` (`norms[i][3] = norms[i][3] * -1 - radius`, where
+Qhull's offset is already negated) and `nifcoll_core._planes_from_mesh`
+(`p[3] - r`) in the ACP toolkit. `nif.xml` documents the fourth component as
+"minus the dot product of v and n". **Neither implementation writes it that
+way.** Deriving it from the XML comment produces a hull that looks right in
+NifSkope and is inside out in the engine.
+
+**The inward shift is guarded.** Havok inflates a convex shape by its radius,
+so the half spaces are pulled in by that much; pulled in further than the shape
+is thick, it collapses or inverts with nothing on screen to say so. The spell
+refuses if the radius is within 90% of `min(Cylinder Radius, length/2)`. The
+toolkit raises on the same condition for the same reason.
+
+**Relinking is one pass, not four cases.** Rather than testing for a rigid
+body, a transform wrapper and a `bhkListShape` sub-shape entry separately, the
+spell builds a one-entry map and calls `NifModel::mapLinks`, which rewrites
+every link in the file that pointed at the cylinder. `removeNiBlock` then runs
+`adjustLinks( root, blocknum, -1 )`, which shifts every higher block number
+down. Nothing references the cylinder by then, so no link is orphaned, and a
+cylinder referenced from two places is handled for free.
+
+**The material is the cylinder's own.** Copied as a `NifValue` rather than read
+as a `uint`, and never defaulted. Havok materials are a per-weapon choice; a
+default here is how a dagger material ends up on an axe.
+
+### There is no undo
+
+NifSkope's undo stack only carries `ChangeValueCommand` and friends — values
+typed into Block Details through the delegate. Spells that insert and remove
+blocks never reach it. **Ctrl+Z will not undo this conversion.** Closing the
+file without saving is the way back.
+
+Conversion is also the last edit that can be made to that shape: once it is a
+set of loose vertices, the nudge keys cannot move it as a unit. If re-cutting
+hulls turns out to be common, group-nudge for hulls is its own feature, not a
+patch to this one.
+
 ## Headless mode and the three CLI operations
 
 Normally NifSkope is a window you click in. **Headless mode** — `--no-gui` plus
@@ -281,6 +368,7 @@ transposes a rotation — no error, just a wrong result.
 | `src/glview.h` | nudge key enum, step constants, ramp state, `eventFilter` declaration |
 | `src/glview.cpp` | the whole feature: key mapping, event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
 | `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
+| `src/spells/havok.cpp` | `spCylinderToConvexHull`: the cylinder-to-hull right-click spell |
 | `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 | `acpbuild.sh` | build helper |
