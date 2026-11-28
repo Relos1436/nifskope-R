@@ -256,6 +256,23 @@ set of loose vertices, the nudge keys cannot move it as a unit. If re-cutting
 hulls turns out to be common, group-nudge for hulls is its own feature, not a
 patch to this one.
 
+### Status
+
+Shipped as ALPHA 11 and **tested in the GUI by the repository owner on
+2026-11-28**: the menu entry appears for a cylinder, the settings take effect,
+the hull replaces the cylinder in place, and the cylinder is gone afterwards.
+
+The geometry was checked numerically before that build, since the two ways it
+can go wrong both render correctly on screen. Across nine cases — axis-aligned
+on each of X, Y and Z, tilted and off origin, a near-degenerate frame, a thin
+ACP-style haft, 6 sides, 64 sides and radius 0 — every stored half space bounds
+its own vertices, and no point of the cylinder's surface or either cap falls
+outside the hull, both to within 4.5e-16.
+
+Worth knowing when choosing `Sides`: a circumscribed ring overshoots the true
+radius by `1/cos(pi/N) - 1`, which is 15.5% at the 6-side minimum, 3.5% at 12,
+2.0% at 16, 0.9% at 24 and 0.1% at 64. Low side counts are a blunt instrument.
+
 ## Headless mode and the three CLI operations
 
 Normally NifSkope is a window you click in. **Headless mode** — `--no-gui` plus
@@ -381,7 +398,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 10 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B)]
+[ACP ALPHA 11 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -429,6 +446,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 9 | cylinder position edited per vertex: X/Y/Z/W, Shift = Vertex A, Ctrl = Vertex B |
 | ALPHA 9.1 | fixed the camera spinning on after a nudge: claimed arrows no longer share the camera's rotate bits |
 | ALPHA 10 | cylinder `Vertex B` moved from Ctrl to Alt, freeing Cut/Redo/Undo |
+| ALPHA 11 | right-click a `bhkCylinderShape` and bake it into a `bhkConvexVerticesShape` |
 
 ## Not done
 
