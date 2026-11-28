@@ -149,6 +149,9 @@ void Scene::clear( [[maybe_unused]] bool flushTextures )
 	roots.clear();
 	shapes.clear();
 
+	// ACP: the shapes these triangle indices belong to have just been deleted.
+	clearRegionSelection();
+
 	animGroups.clear();
 	animTags.clear();
 
@@ -179,6 +182,23 @@ void Scene::update( const NifModel * nif, const QModelIndex & index )
 
 		for ( Node * node : nodes.list() )
 			node->update( nif, block );
+
+		// ACP: triangle indices are not persistent.  If the edit just made
+		// changed how many triangles the selected shape has, the selected
+		// indices now mean different faces, so the selection is dropped
+		// rather than silently building a hull from the wrong ones.  A
+		// reorder that keeps the count is not caught -- bounds are still
+		// checked, so the worst case is a wrong hull, never a crash.
+		if ( isSelModeRegion() && !regionTris.isEmpty() && regionShape.isValid() ) {
+			int	b = nif->getBlockNumber( regionShape );
+			for ( Shape * s : shapes ) {
+				if ( s && s->id() == b ) {
+					if ( s->triangles.size() != regionTriCount )
+						clearRegionSelection();
+					break;
+				}
+			}
+		}
 	} else {
 		properties.validate();
 		nodes.validate();
@@ -231,7 +251,22 @@ void Scene::updateSelectMode( QAction * action )
 		return;
 
 	selMode = SelMode( action->data().toInt() );
+
+	// ACP: leaving region select throws the selection away rather than keeping
+	// it alive invisibly, where a later build would use faces the user can no
+	// longer see.
+	if ( !isSelModeRegion() )
+		clearRegionSelection();
+
 	emit sceneUpdated();
+}
+
+// ACP
+void Scene::clearRegionSelection()
+{
+	regionShape = QPersistentModelIndex();
+	regionTris.clear();
+	regionTriCount = 0;
 }
 
 void Scene::updateLodLevel( int level )
@@ -368,6 +403,8 @@ void Scene::transform( const Transform & trans, float time )
 
 void Scene::draw()
 {
+	regionOverlayDrawn = false;	// ACP: once per frame, not once per pass
+
 	drawShapes();
 
 	glDisable( GL_CULL_FACE );
@@ -486,6 +523,27 @@ void Scene::drawSelection() const
 {
 	if ( selecting )
 		return; // do not render the selection when selecting
+
+	// ACP: the face selection is drawn for the shape it belongs to whatever
+	// block is current in the Block List, because it is not tied to that
+	// selection at all -- you pick faces with the mouse and then right-click
+	// the shape to build from them.
+	if ( isSelModeRegion() && !regionOverlayDrawn && !regionTris.isEmpty()
+		 && regionShape.isValid() && nifModel ) {
+		int	b = nifModel->getBlockNumber( regionShape );
+		for ( Shape * s : shapes ) {
+			if ( s && s->id() == b ) {
+				FloatVector4	c( highlightColor );
+				c[3] = 0.5f;
+				s->drawRegionSelection( regionTris, c );
+				// Blended fill, drawn once a frame: this function is called
+				// again for the transparency pass, and a second pass over the
+				// same faces would stack the alpha.
+				regionOverlayDrawn = true;
+				break;
+			}
+		}
+	}
 
 	for ( Node * node : nodes.list() ) {
 		node->drawSelection();

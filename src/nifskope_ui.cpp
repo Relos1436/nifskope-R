@@ -234,6 +234,9 @@ void NifSkope::initActions()
 
 	ui->aSelectObject->setData( Scene::SelObject );
 	ui->aSelectVertex->setData( Scene::SelVertex );
+	// ACP: region select keeps SelObject set, so block picking and everything
+	// else that tests isSelModeObject() carries on working while it is on.
+	ui->aSelectRegion->setData( Scene::SelObject | Scene::SelRegion );
 
 	auto agroup = [this]( QVector<QAction *> actions, bool exclusive ) {
 		QActionGroup * ag = new QActionGroup( this );
@@ -246,7 +249,7 @@ void NifSkope::initActions()
 		return ag;
 	};
 
-	selectActions = agroup( { ui->aSelectObject, ui->aSelectVertex }, true );
+	selectActions = agroup( { ui->aSelectObject, ui->aSelectVertex, ui->aSelectRegion }, true );
 	connect( selectActions, &QActionGroup::triggered, ogl->getScene(), &Scene::updateSelectMode );
 
 	showActions = agroup( { ui->aShowAxes, ui->aShowGrid, ui->aShowNodes, ui->aShowCollision,

@@ -96,9 +96,9 @@ int main( int argc, char * argv[] )
 		a->setApplicationName( "NifSkope " + NifSkopeVersion::rawToMajMin( NIFSKOPE_VERSION ) );
 		a->setApplicationVersion( NIFSKOPE_VERSION );
 #ifdef NIFSKOPE_REVISION
-		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (build " + NIFSKOPE_REVISION + ", " + __DATE__ + ") [ACP ALPHA 11 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull]" );
+		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (build " + NIFSKOPE_REVISION + ", " + __DATE__ + ") [ACP ALPHA 12 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull; Select Collision Region paints faces (drag, Ctrl erase, B grow, [ ] brush size) and builds a hull from them]" );
 #else
-		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (" + __DATE__ + ") [ACP ALPHA 11 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull]" );
+		a->setApplicationDisplayName( "NifSkope R " + NifSkopeVersion::rawToDisplay( NIFSKOPE_VERSION, true ) + " (" + __DATE__ + ") [ACP ALPHA 12 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull; Select Collision Region paints faces (drag, Ctrl erase, B grow, [ ] brush size) and builds a hull from them]" );
 #endif
 
 		// Must set current directory or this causes issues with several features

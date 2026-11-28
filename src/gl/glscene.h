@@ -43,6 +43,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QHash>
 #include <QMap>
 #include <QPersistentModelIndex>
+#include <QSet>
 #include <QStringList>
 
 
@@ -170,7 +171,11 @@ public:
 		SelNone = 0,
 		SelObject = 1,
 		SelVertex = 2,
-		SelTriangle = 4
+		SelTriangle = 4,
+		//! ACP: face selection, for building collision out of part of a mesh.
+		//! Always set together with SelObject, so block picking and everything
+		//! else that tests isSelModeObject() keeps working while it is on.
+		SelRegion = 8
 	};
 
 	Q_DECLARE_FLAGS( SelMode, SelModes );
@@ -178,6 +183,31 @@ public:
 	SelMode selMode;
 	inline bool isSelModeObject() const { return ( selMode & SelObject ); }
 	inline bool isSelModeVertex() const { return ( selMode & SelVertex ); }
+	inline bool isSelModeRegion() const { return ( selMode & SelRegion ); }
+
+	// ACP: a set of faces on one shape, used to build a collision hull from
+	// part of a mesh.  It lives here and nowhere in the file: nothing is
+	// written until the hull is built, and the mesh is never split.
+	//
+	// The shape is held as a persistent index rather than a block number so
+	// that inserting a block cannot silently point the selection at a
+	// different shape.  The triangle indices are not persistent, so any edit
+	// that reorders a shape's triangles invalidates the selection -- Escape
+	// clears it, and building from a stale one is guarded in the spell.
+	QPersistentModelIndex regionShape;
+	QSet<quint32> regionTris;
+	//! Brush radius in screen pixels. Pixels, not model units, so zooming in
+	//! gives finer control for free.
+	int regionBrushRadius = 10;
+	//! Grow stops at folds sharper than this, in degrees.
+	float regionCreaseAngle = 30.0f;
+	//! Triangle count the shape had when the selection was made. Indices mean
+	//! something else if that changes, so the selection is dropped.
+	qsizetype regionTriCount = 0;
+	//! drawSelection() runs twice in a frame when there is a transparency
+	//! pass, which would stack the overlay's alpha on itself.
+	mutable bool regionOverlayDrawn = false;
+	void clearRegionSelection();
 
 	enum LodLevel
 	{

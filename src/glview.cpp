@@ -61,6 +61,10 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QLineEdit>
 #include <QMimeData>
 #include <QMouseEvent>
+#include <QCursor>
+#include <QPainter>
+#include <QPixmap>
+#include <QMultiHash>
 #include <QPlainTextEdit>
 #include <QTextEdit>
 #include <QPushButton>
@@ -869,8 +873,11 @@ void GLView::setVisMode( Scene::VisMode mode, bool checked )
 
 typedef void (Scene::* DrawFunc)( void );
 
-static int indexAt(
-	NifModel * model, Scene * scene, QList<DrawFunc> drawFunc, const QPointF & pos, int & furn, bool shiftModifier )
+// ACP: rasterise the scene with colour-key IDs into an offscreen image.  Split
+// out of indexAt() unchanged so the region brush can read a whole disc of
+// pixels out of one render, rather than re-rendering the scene per sample.
+static bool renderSelectionImage(
+	Scene * scene, const QList<DrawFunc> & drawFunc, int selectionFlags, QImage & img )
 {
 	// Color Key O(1) selection
 	//	Open GL 3.0 says glRenderMode is deprecated
@@ -912,11 +919,6 @@ static int indexAt(
 	context->setDefaultVertexAttribs( Scene::defaultAttrMask, Scene::defaultVertexAttrs );
 
 	// Rasterize the scene
-	int	selectionFlags = int( Scene::SelObject );
-	if ( scene->isSelModeVertex() )
-		selectionFlags |= int( Scene::SelVertex );
-	else if ( shiftModifier )
-		selectionFlags |= int( Scene::SelTriangle );
 	scene->selecting = (unsigned char) selectionFlags;
 	for ( DrawFunc df : drawFunc ) {
 		(scene->*df)();
@@ -932,17 +934,45 @@ static int indexAt(
 
 	fbo.release();
 
-	QImage img( fbo.toImage() );
+	img = fbo.toImage();
 	// disable premultiplied alpha
 	img.reinterpretAsFormat( QImage::Format_ARGB32 );
-	std::uint32_t pixel = std::uint32_t( img.pixel( pos.toPoint() ) );
+
+	return !img.isNull();
+}
+
+// ACP: one pixel of the ID image, as a block / vertex / triangle number.  -1
+// is the background.  Kept separate so both the single pick and the brush
+// decode identically.
+static inline int decodeSelectionPixel( const QImage & img, int x, int y )
+{
+	if ( x < 0 || y < 0 || x >= img.width() || y >= img.height() )
+		return -1;
+
+	std::uint32_t pixel = std::uint32_t( img.pixel( x, y ) );
+
+	// Convert BGRA to RGBA
+	pixel = ( pixel & 0xFF00FF00U ) | ( ( pixel & 0xFFU ) << 16 ) | ( ( pixel >> 16 ) & 0xFFU );
+
+	return getIDFromColorKey( pixel );
+}
+
+static int indexAt(
+	NifModel * model, Scene * scene, QList<DrawFunc> drawFunc, const QPointF & pos, int & furn, bool shiftModifier )
+{
+	int	selectionFlags = int( Scene::SelObject );
+	if ( scene->isSelModeVertex() )
+		selectionFlags |= int( Scene::SelVertex );
+	else if ( shiftModifier )
+		selectionFlags |= int( Scene::SelTriangle );
+
+	QImage	img;
+	if ( !renderSelectionImage( scene, drawFunc, selectionFlags, img ) )
+		return -1;
 
 #ifndef QT_NO_DEBUG
 	img.save( "fbo.png" );
 #endif
-
-	// Convert BGRA to RGBA
-	pixel = ( pixel & 0xFF00FF00U ) | ( ( pixel & 0xFFU ) << 16 ) | ( ( pixel >> 16 ) & 0xFFU );
 
 	// Decode:
 	// R = (id & 0x000000FF) >> 0
@@ -950,7 +980,8 @@ static int indexAt(
 	// B = (id & 0x00FF0000) >> 16
 	// A = (id & 0xFF000000) >> 24
 
-	int choose = getIDFromColorKey( pixel );
+	QPoint	p( pos.toPoint() );
+	int choose = decodeSelectionPixel( img, p.x(), p.y() );
 
 	// Pick BSFurnitureMarker
 	if ( choose > 0 && selectionFlags == int( Scene::SelObject ) ) {
@@ -1030,6 +1061,303 @@ QModelIndex GLView::indexAt( const QPointF & pos, bool shiftModifier )
 	}
 
 	return chooseIndex;
+}
+
+// ACP ======================= region (face) selection =======================
+//
+// Picking part of a mesh -- a blade, a guard, a grip -- and building one
+// collision hull from it, without splitting the mesh.  Nothing here writes to
+// the file: the selection is editor state, and the only output is the hull
+// that Havok -> Create Convex Shape from Selection inserts.
+
+Shape * GLView::regionTargetShape() const
+{
+	if ( !( model && scene->regionShape.isValid() ) )
+		return nullptr;
+
+	int	b = model->getBlockNumber( scene->regionShape );
+	for ( Shape * s : scene->shapes ) {
+		if ( s && s->id() == b )
+			return s;
+	}
+	return nullptr;
+}
+
+// The brush is drawn as the mouse cursor, which is the only size readout there
+// is: the viewport has no text layer to print one in.
+void GLView::updateRegionCursor()
+{
+	int	r = std::clamp( scene->regionBrushRadius, 1, 48 );
+	int	d = ( r * 2 ) + 3;
+
+	// The radius is in logical pixels, as the brush itself is, so the pixmap
+	// is built at device resolution and told its ratio -- otherwise the circle
+	// comes out half size on a HiDPI display and lies about the brush.
+	qreal	dpr = devicePixelRatioF();
+	QPixmap	pm( int( d * dpr + 0.5 ), int( d * dpr + 0.5 ) );
+	pm.setDevicePixelRatio( dpr );
+	pm.fill( Qt::transparent );
+	{
+		QPainter	p( &pm );
+		p.setRenderHint( QPainter::Antialiasing, true );
+		QPointF	c( d * 0.5, d * 0.5 );
+		// Dark under light, so the circle stays visible on any background.
+		p.setPen( QPen( QColor( 0, 0, 0, 170 ), 3.0 ) );
+		p.drawEllipse( c, qreal( r ), qreal( r ) );
+		p.setPen( QPen( QColor( 255, 255, 255, 235 ), 1.0 ) );
+		p.drawEllipse( c, qreal( r ), qreal( r ) );
+		p.drawLine( QPointF( c.x() - 2.0, c.y() ), QPointF( c.x() + 2.0, c.y() ) );
+		p.drawLine( QPointF( c.x(), c.y() - 2.0 ), QPointF( c.x(), c.y() + 2.0 ) );
+	}
+
+	setCursor( QCursor( pm, r + 1, r + 1 ) );
+	regionCursorRadius = scene->regionBrushRadius;
+}
+
+void GLView::regionBrush( const QPointF & pos1, const QPointF & pos2, bool erase )
+{
+	if ( !( model && scene->isSelModeRegion() && isValid() && isVisible() && scene->renderer ) )
+		return;
+
+	// Meshes only.  Rendering collision or node markers into the ID image
+	// would let the collision shape already on the weapon occlude the mesh
+	// being painted, which is exactly the mesh you are trying to pick.
+	QList<DrawFunc>	df;
+	df << &Scene::drawShapes;
+
+	QImage	img;
+	bool	ok = false;
+	{
+		auto	prvContext = pushGLContext();
+		scene->renderer->setViewport( 0, 0, pixelWidth, pixelHeight );
+		glProjection();
+		ok = renderSelectionImage( scene, df, int( Scene::SelObject ) | int( Scene::SelTriangle ), img );
+		popGLContext( prvContext );
+	}
+	if ( !ok )
+		return;
+
+	double	p = devicePixelRatioF();
+	int	radius = std::max( 1, int( ( double( scene->regionBrushRadius ) * p ) + 0.5 ) );
+	int	r2 = radius * radius;
+
+	// One render, several discs along the stroke: sampling only the end points
+	// would leave gaps in a fast drag, and re-rendering per sample would make
+	// the brush crawl.  The camera cannot move mid-stroke, so one snapshot of
+	// the ID image is good for the whole segment.
+	QPointF	a( pos1.x() * p, pos1.y() * p );
+	QPointF	b( pos2.x() * p, pos2.y() * p );
+	double	dist = std::hypot( b.x() - a.x(), b.y() - a.y() );
+	int	steps = 1 + int( dist / std::max( 1.0, double( radius ) * 0.5 ) );
+	steps = std::min( steps, 64 );
+
+	int	targetBlock = ( scene->regionShape.isValid() ? model->getBlockNumber( scene->regionShape ) : -1 );
+	Shape *	target = regionTargetShape();
+	bool	changed = false;
+
+	for ( int i = 0; i < steps; i++ ) {
+		double	f = ( steps > 1 ? double( i ) / double( steps - 1 ) : 0.0 );
+		int	cx = int( a.x() + ( ( b.x() - a.x() ) * f ) + 0.5 );
+		int	cy = int( a.y() + ( ( b.y() - a.y() ) * f ) + 0.5 );
+
+		for ( int y = -radius; y <= radius; y++ ) {
+			for ( int x = -radius; x <= radius; x++ ) {
+				if ( ( ( x * x ) + ( y * y ) ) > r2 )
+					continue;
+
+				int	id = decodeSelectionPixel( img, cx + x, cy + y );
+				if ( id < 0 )
+					continue;
+
+				// Triangle colour key: block number in the low 15 bits, the
+				// primitive ID above it, as selection.frag writes it.
+				int	blockNum = id & 0x7FFF;
+				quint32	tri = quint32( (unsigned int) id >> 15 );
+
+				if ( targetBlock < 0 ) {
+					// The first face painted decides which shape the
+					// selection belongs to: one hull comes from one shape.
+					QModelIndex	iShape = model->getBlockIndex( blockNum );
+					if ( !iShape.isValid() )
+						continue;
+					scene->regionShape = iShape;
+					targetBlock = blockNum;
+					target = regionTargetShape();
+					if ( !target ) {
+						scene->clearRegionSelection();
+						targetBlock = -1;
+						continue;
+					}
+					// Remembered so an edit that changes the triangle count
+					// can drop the selection instead of letting the indices
+					// quietly come to mean other faces.
+					scene->regionTriCount = target->triangles.size();
+				} else if ( blockNum != targetBlock ) {
+					continue;
+				}
+
+				if ( !target || qsizetype( tri ) >= target->triangles.size() )
+					continue;
+
+				if ( erase ) {
+					if ( scene->regionTris.remove( tri ) )
+						changed = true;
+				} else if ( !scene->regionTris.contains( tri ) ) {
+					scene->regionTris.insert( tri );
+					changed = true;
+				}
+			}
+		}
+	}
+
+	if ( scene->regionTris.isEmpty() )
+		scene->clearRegionSelection();
+
+	if ( changed )
+		update();
+}
+
+// Faces that touch by POSITION, not by vertex index.  A mesh duplicates
+// vertices wherever a UV seam or a shading split runs, so two triangles that
+// visibly share an edge frequently share no index at all -- growing on indices
+// alone stops dead at an invisible seam down the middle of a blade.
+static void buildWeldedVertexMap( const QVector< Vector3 > & verts, QVector< int > & rep )
+{
+	qsizetype	n = verts.size();
+	rep.resize( n );
+	for ( qsizetype i = 0; i < n; i++ )
+		rep[i] = int( i );
+
+	// A NaN coordinate would make the comparator below not a strict weak
+	// ordering, which is undefined behaviour in std::sort and does crash.  A
+	// vertex that is not finite is simply left welded to itself.
+	QVector< int >	order;
+	order.reserve( n );
+	for ( qsizetype i = 0; i < n; i++ ) {
+		const Vector3 &	v = verts.at( i );
+		if ( std::isfinite( v[0] ) && std::isfinite( v[1] ) && std::isfinite( v[2] ) )
+			order.append( int( i ) );
+	}
+	n = order.size();
+	if ( n < 2 )
+		return;
+
+	std::sort( order.begin(), order.end(), [&verts]( int a, int b ) {
+		const Vector3 &	u = verts.at( a );
+		const Vector3 &	v = verts.at( b );
+		if ( u[0] != v[0] )
+			return u[0] < v[0];
+		if ( u[1] != v[1] )
+			return u[1] < v[1];
+		return u[2] < v[2];
+	} );
+
+	qsizetype	i = 0;
+	while ( i < n ) {
+		const Vector3 &	v = verts.at( order.at( i ) );
+		qsizetype	j = i + 1;
+		while ( j < n ) {
+			const Vector3 &	w = verts.at( order.at( j ) );
+			if ( !( v[0] == w[0] && v[1] == w[1] && v[2] == w[2] ) )
+				break;
+			j++;
+		}
+		for ( qsizetype k = i; k < j; k++ )
+			rep[ order.at( k ) ] = order.at( i );
+		i = j;
+	}
+}
+
+static inline quint64 weldedEdgeKey( int u, int v )
+{
+	int	lo = std::min( u, v );
+	int	hi = std::max( u, v );
+	return ( quint64( quint32( lo ) ) << 32 ) | quint64( quint32( hi ) );
+}
+
+static inline Vector3 regionFaceNormal( const QVector< Vector3 > & verts, const Triangle & t )
+{
+	Vector3	n = Vector3::crossproduct( verts.at( t[1] ) - verts.at( t[0] ),
+										verts.at( t[2] ) - verts.at( t[0] ) );
+	float	len = n.length();
+	if ( len > 0.0f )
+		n = n / len;
+	return n;
+}
+
+void GLView::regionGrow( bool toIsland )
+{
+	Shape *	s = regionTargetShape();
+	if ( !s || scene->regionTris.isEmpty() )
+		return;
+
+	const QVector< Triangle > &	tris = s->triangles;
+	const QVector< Vector3 > &	verts = s->verts;
+	if ( tris.isEmpty() || verts.isEmpty() )
+		return;
+
+	QVector< int >	rep;
+	buildWeldedVertexMap( verts, rep );
+	qsizetype	nv = rep.size();
+
+	auto	triWelded = [&tris, &rep, nv]( qsizetype i, int * out ) -> bool {
+		const Triangle &	t = tris.at( i );
+		for ( int e = 0; e < 3; e++ ) {
+			qsizetype	v = qsizetype( t[e] );
+			if ( v < 0 || v >= nv )
+				return false;
+			out[e] = rep.at( v );
+		}
+		return true;
+	};
+
+	QMultiHash< quint64, int >	edges;
+	edges.reserve( int( tris.size() * 3 ) );
+	for ( qsizetype i = 0; i < tris.size(); i++ ) {
+		int	a[3];
+		if ( !triWelded( i, a ) )
+			continue;
+		for ( int e = 0; e < 3; e++ )
+			edges.insert( weldedEdgeKey( a[e], a[ ( e + 1 ) % 3 ] ), int( i ) );
+	}
+
+	// Each face is compared against the face it spread from, so the limit is
+	// the fold between neighbours rather than a drift from the seed -- the same
+	// behaviour as "select linked flat faces" in a modelling package.
+	float	cosLimit = std::cos( scene->regionCreaseAngle * float( M_PI ) / 180.0f );
+
+	QList< int >	queue;
+	for ( quint32 t : scene->regionTris ) {
+		if ( qsizetype( t ) < tris.size() )
+			queue.append( int( t ) );
+	}
+
+	QSet< quint32 > &	sel = scene->regionTris;
+	while ( !queue.isEmpty() ) {
+		int	i = queue.takeLast();
+		int	a[3];
+		if ( !triWelded( qsizetype( i ), a ) )
+			continue;
+		Vector3	ni = regionFaceNormal( verts, tris.at( i ) );
+
+		for ( int e = 0; e < 3; e++ ) {
+			quint64	key = weldedEdgeKey( a[e], a[ ( e + 1 ) % 3 ] );
+			for ( auto it = edges.constFind( key ); it != edges.constEnd() && it.key() == key; ++it ) {
+				int	j = it.value();
+				if ( j == i || sel.contains( quint32( j ) ) )
+					continue;
+				if ( !toIsland ) {
+					Vector3	nj = regionFaceNormal( verts, tris.at( j ) );
+					if ( Vector3::dotproduct( ni, nj ) < cosLimit )
+						continue;
+				}
+				sel.insert( quint32( j ) );
+				queue.append( j );
+			}
+		}
+	}
+
+	update();
 }
 
 void GLView::center()
@@ -2038,10 +2366,32 @@ void GLView::mouseMoveEvent( QMouseEvent * event )
 		dy = 0.0f;
 	}
 
+	// ACP: a paint stroke, not a camera move.  Sampled from the last position
+	// to this one so a fast drag does not leave gaps.
+	if ( regionPainting ) {
+		if ( buttonMask & Qt::LeftButton ) {
+			regionBrush( lastPos, newPos, regionErasing );
+			lastPos = newPos;
+			return;
+		}
+		regionPainting = false;
+	}
+
+	// ACP: the brush is drawn as the cursor, so it has to follow the size, and
+	// has to be given back when region select is switched off.
+	if ( scene->isSelModeRegion() ) {
+		if ( regionCursorRadius != scene->regionBrushRadius )
+			updateRegionCursor();
+	} else if ( regionCursorRadius >= 0 ) {
+		unsetCursor();
+		regionCursorRadius = -1;
+	}
+
 	if ( ( buttonMask & Qt::LeftButton ) && !kbd( Key_MoveCam ) ) {
 		if ( kbd( Key_RotateXY ) || kbd( Key_RotateZ ) || kbd( Key_Scale ) || kbd( Key_TranslateXY ) )
 			transformItem( dx, dy );
-		else if ( !frontalLight && ( event->modifiers() & Qt::ShiftModifier ) )
+		else if ( !frontalLight && ( event->modifiers() & Qt::ShiftModifier )
+		          && !scene->isSelModeRegion() )
 			rotateLight( dy * 0.5f, dx * 0.5f );
 		else
 			mouseRot += Vector3( dy * 0.5f, 0.0f, dx * 0.5f );
@@ -2066,11 +2416,29 @@ void GLView::mousePressEvent( QMouseEvent * event )
 	lastPos = getQMouseEventPosition( event );
 
 	pressPos = lastPos;
+
+	// ACP: in region select the left button paints faces instead of orbiting,
+	// and Ctrl erases them.  Shift is deliberately left to the camera, so the
+	// model can still be turned around to paint the other side.
+	if ( scene->isSelModeRegion() && event->button() == Qt::LeftButton
+	     && !( event->modifiers() & ( Qt::ShiftModifier | Qt::AltModifier ) ) ) {
+		regionPainting = true;
+		regionErasing = bool( event->modifiers() & Qt::ControlModifier );
+		regionBrush( lastPos, lastPos, regionErasing );
+	}
 }
 
 void GLView::mouseReleaseEvent( QMouseEvent * event )
 {
 	mouseButtonState &= ~( std::uint32_t( event->button() ) );
+
+	// ACP: a paint stroke is not a click, and must not change the current
+	// block out from under the selection that was just painted.
+	if ( regionPainting ) {
+		regionPainting = false;
+		if ( event->button() == Qt::LeftButton )
+			return;
+	}
 
 	auto	evtPos = getQMouseEventPosition( event );
 #ifdef Q_OS_LINUX
@@ -2219,7 +2587,8 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 
 	// Never take keys away from somewhere text is being typed.
 	if ( qobject_cast< QLineEdit * >( fw ) || qobject_cast< QAbstractSpinBox * >( fw )
-	     || qobject_cast< QTextEdit * >( fw ) || qobject_cast< QPlainTextEdit * >( fw ) )
+	     || qobject_cast< QTextEdit * >( fw ) || qobject_cast< QPlainTextEdit * >( fw )
+	     || qobject_cast< QComboBox * >( fw ) )
 		return QOpenGLWindow::eventFilter( o, e );
 
 	QKeyEvent *	ke = static_cast< QKeyEvent * >( e );
@@ -2249,6 +2618,42 @@ bool GLView::eventFilter( QObject * o, QEvent * e )
 		nudgeAlt = ( t == QEvent::KeyPress );
 	else if ( t != QEvent::ShortcutOverride )
 		nudgeAlt = bool( ke->modifiers() & Qt::AltModifier );
+
+	// ACP: region-select keys.  Every one is gated on the mode being on, so
+	// none of them is taken away from anything while it is off.
+	if ( scene->isSelModeRegion() && t == QEvent::KeyPress
+	     && !( ke->modifiers() & ( Qt::ControlModifier | Qt::AltModifier ) ) ) {
+		switch ( ke->key() ) {
+		case Qt::Key_B:
+			// B spreads the selection to the nearest crease; Shift+B takes the
+			// whole connected piece, creases and all.
+			regionGrow( bool( ke->modifiers() & Qt::ShiftModifier ) );
+			return true;
+		case Qt::Key_BracketLeft:
+		case Qt::Key_BracketRight:
+			{
+				int	step = ( ke->key() == Qt::Key_BracketRight ? 2 : -2 );
+				scene->regionBrushRadius = std::clamp( scene->regionBrushRadius + step, 1, 48 );
+				updateRegionCursor();
+			}
+			return true;
+		case Qt::Key_Comma:
+		case Qt::Key_Period:
+			{
+				float	step = ( ke->key() == Qt::Key_Period ? 5.0f : -5.0f );
+				scene->regionCreaseAngle = std::clamp( scene->regionCreaseAngle + step, 5.0f, 175.0f );
+				if ( acpLogOn() )
+					acpLog( QString( "region crease angle = %1" ).arg( double( scene->regionCreaseAngle ) ) );
+			}
+			return true;
+		case Qt::Key_Escape:
+			scene->clearRegionSelection();
+			update();
+			return true;
+		default:
+			break;
+		}
+	}
 
 	bool	twoPoint = ( scene->nifModel && scene->currentBlock.isValid()
 	                     && scene->nifModel->blockInherits( scene->currentBlock,

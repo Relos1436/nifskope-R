@@ -259,6 +259,24 @@ private:
 
 	QWidget * graphicsView = nullptr;
 
+	// ACP: region (face) selection.  See glscene.h for where the selection
+	// itself lives, and glview.cpp for the brush and the grow operations.
+	bool regionPainting = false;
+	bool regionErasing = false;
+	//! Radius the mouse cursor was last drawn for, -1 if it is not ours.
+	int regionCursorRadius = -1;
+	//! Collect the faces under a brush stroke from pos1 to pos2 into the
+	//! scene's region selection, or remove them when erase is true.
+	void regionBrush( const QPointF & pos1, const QPointF & pos2, bool erase );
+	//! Spread the selection across shared edges. toIsland ignores creases and
+	//! takes the whole connected piece; otherwise it stops at folds sharper
+	//! than Scene::regionCreaseAngle.
+	void regionGrow( bool toIsland );
+	//! The shape the region selection belongs to, or nullptr.
+	class Shape * regionTargetShape() const;
+	//! Draw the brush as the mouse cursor, so its size is visible.
+	void updateRegionCursor();
+
 	enum Key : unsigned char
 	{
 		Key_CenterView = 1,

@@ -1110,19 +1110,26 @@ QModelIndex spCylinderToConvexHull::cast( NifModel * nif, const QModelIndex & iB
 
 		// The side plane spanning vertices i and i+1 is tangent to the
 		// cylinder, so its support distance is exactly the cylinder radius.
-		// The stored w is that distance less the shell radius: outward normal,
-		// positive support, as both Create Convex Shapes and the Accurate
-		// Collision Project toolkit write it.  The XML comment describing w as
-		// minus the dot product does not match what either one produces.
+		//
+		// The stored w is MINUS that distance, which is what nif.xml says and
+		// what Bethesda's own meshes hold: checked against three of them, and
+		// every stored w was exactly minus the dot product of the normal with
+		// the furthest vertex, in Havok units.  (ALPHA 11 shipped this with
+		// the opposite sign, from trusting two generators that agree with each
+		// other and not with the format.  A wrong sign here renders perfectly
+		// and is inside out in the engine, which is why it survived.)
+		//
+		// Havok inflates the shape by the shell radius, so the plane is pulled
+		// in by that much -- a smaller support distance, so a larger w.
 		Vector3	n = e1 * float( cos( step * ( double( i ) + 0.5 ) ) )
 					+ e2 * float( sin( step * ( double( i ) + 0.5 ) ) );
 		norms.append( Vector4( n[0], n[1], n[2],
-							   Vector3::dotproduct( n, ptA ) + cylRadius - radius ) );
+							   -( Vector3::dotproduct( n, ptA ) + cylRadius ) + radius ) );
 	}
 
 	// The two flat caps.
-	norms.append( Vector4( u[0], u[1], u[2], Vector3::dotproduct( u, ptB ) - radius ) );
-	norms.append( Vector4( -u[0], -u[1], -u[2], -Vector3::dotproduct( u, ptA ) - radius ) );
+	norms.append( Vector4( u[0], u[1], u[2], -Vector3::dotproduct( u, ptB ) + radius ) );
+	norms.append( Vector4( -u[0], -u[1], -u[2], Vector3::dotproduct( u, ptA ) + radius ) );
 
 	// Vanilla files keep both arrays lexicographically sorted.  Neither is
 	// indexed by anything else, so reordering them is free.
@@ -1165,6 +1172,375 @@ QModelIndex spCylinderToConvexHull::cast( NifModel * nif, const QModelIndex & iB
 }
 
 REGISTER_SPELL( spCylinderToConvexHull )
+
+
+//! Creates a convex hull from the faces selected in the viewport
+//!
+//! The convex hull of a whole weapon is a slab: it bridges the guard to the
+//! blade tip and swallows the grip, and every bit of that bridge is collision
+//! in empty air.  Collision for a weapon is therefore always several hulls,
+//! and the only real question is which vertices go in which hull.  This
+//! answers it by eye: paint the blade in the viewport (Render -> Select
+//! Collision Region), then build a hull from exactly those faces.
+//!
+//! The mesh is never touched.  The selection lives in the Scene, the faces are
+//! read out of the shape that is already loaded for rendering, and the only
+//! thing written is the new shape -- added to a bhkListShape if the collision
+//! object already has one, so regions can be built one at a time.
+class spCVSFromRegion final : public Spell
+{
+public:
+	QString name() const override final { return Spell::tr( "Create Convex Shape from Selection" ); }
+	QString page() const override final { return Spell::tr( "Havok" ); }
+
+	static Scene * getScene( const NifModel * nif )
+	{
+		if ( NifSkope * w = dynamic_cast< NifSkope * >( const_cast< NifModel * >( nif )->getWindow() ); w ) {
+			if ( GLView * ogl = w->getGLView(); ogl )
+				return ogl->getScene();
+		}
+		return nullptr;
+	}
+
+	//! The selected shape, if the selection is usable at all.
+	static Shape * getRegionShape( const NifModel * nif, Scene * scene )
+	{
+		if ( !( nif && scene && scene->isSelModeRegion() ) )
+			return nullptr;
+		if ( scene->regionTris.isEmpty() || !scene->regionShape.isValid() )
+			return nullptr;
+
+		int	b = nif->getBlockNumber( scene->regionShape );
+		for ( Shape * s : scene->shapes ) {
+			if ( s && s->id() == b && !( s->verts.isEmpty() || s->triangles.isEmpty() ) )
+				return s;
+		}
+		return nullptr;
+	}
+
+	bool isApplicable( const NifModel * nif, const QModelIndex & index ) override final
+	{
+		if ( !( nif && nif->getBSVersion() > 0 && index.isValid() ) )
+			return false;
+
+		Scene *	scene = getScene( nif );
+		Shape *	s = getRegionShape( nif, scene );
+		if ( !s )
+			return false;
+
+		// Offered on the shape the faces belong to, and on the NiNode the
+		// collision would be attached to, so either is a sensible thing to
+		// have right-clicked.
+		QModelIndex	iBlock = nif->getBlockIndex( index );
+		int	b = nif->getBlockNumber( iBlock );
+		if ( b < 0 )
+			return false;
+		int	shapeBlock = nif->getBlockNumber( scene->regionShape );
+		return ( b == shapeBlock || b == nif->getParent( shapeBlock ) );
+	}
+
+	static bool settingsDialog( float & radius, float & grow, float & precision );
+
+	QModelIndex cast( NifModel * nif, const QModelIndex & index ) override final;
+};
+
+bool spCVSFromRegion::settingsDialog( float & radius, float & grow, float & precision )
+{
+	{
+		QSettings	settings;
+		settings.beginGroup( "Spells/Havok/Create Convex Shape from Selection" );
+		radius = settings.value( "Radius", 0.001f ).toFloat();
+		grow = settings.value( "Grow", 0.0f ).toFloat();
+		precision = settings.value( "Precision", 0.25f ).toFloat();
+		settings.endGroup();
+	}
+
+	QDialog	dlg;
+	dlg.setWindowTitle( Spell::tr( "Create Convex Shape from Selection" ) );
+	QVBoxLayout *	vbox = new QVBoxLayout;
+	dlg.setLayout( vbox );
+
+	spCreateCVS::addLabel( vbox, Spell::tr( "A hull is flat between the vertices it was built from, so it cuts" ) );
+	spCreateCVS::addLabel( vbox, Spell::tr( "slightly inside the mesh. Grow pushes it back out. Collision inside" ) );
+	spCreateCVS::addLabel( vbox, Spell::tr( "the visible weapon is collision the player never feels in VR." ) );
+
+	auto	spnRadius = spCreateCVS::addSpinBox( vbox, Spell::tr( "Collision Radius (in Havok units)" ),
+												 double( radius ), 0.0, 0.5, 4 );
+	auto	spnGrow = spCreateCVS::addSpinBox( vbox, Spell::tr( "Grow (in Havok units)" ),
+											   double( grow ), 0.0, 0.5, 4 );
+	auto	spnPrec = spCreateCVS::addSpinBox( vbox, Spell::tr( "Precision" ),
+											   double( precision ), 0.01, 10.0, 2 );
+
+	spCreateCVS::addLabel( vbox, QString() );
+
+	QHBoxLayout *	hbox = new QHBoxLayout;
+	vbox->addLayout( hbox );
+
+	QPushButton *	ok = new QPushButton;
+	ok->setText( Spell::tr( "Ok" ) );
+	hbox->addWidget( ok );
+
+	QPushButton *	cancel = new QPushButton;
+	cancel->setText( Spell::tr( "Cancel" ) );
+	hbox->addWidget( cancel );
+
+	QObject::connect( ok, &QPushButton::clicked, &dlg, &QDialog::accept );
+	QObject::connect( cancel, &QPushButton::clicked, &dlg, &QDialog::reject );
+
+	if ( dlg.exec() != QDialog::Accepted )
+		return false;
+
+	radius = float( spnRadius->value() );
+	grow = float( spnGrow->value() );
+	precision = float( spnPrec->value() );
+
+	QSettings	settings;
+	settings.beginGroup( "Spells/Havok/Create Convex Shape from Selection" );
+	settings.setValue( "Radius", QVariant( radius ) );
+	settings.setValue( "Grow", QVariant( grow ) );
+	settings.setValue( "Precision", QVariant( precision ) );
+	settings.endGroup();
+
+	return true;
+}
+
+QModelIndex spCVSFromRegion::cast( NifModel * nif, const QModelIndex & index )
+{
+	Scene *	scene = getScene( nif );
+	Shape *	s = getRegionShape( nif, scene );
+	if ( !s )
+		return index;
+
+	// The collision object hangs off a NiNode, so that is what everything is
+	// attached to and what the shape's vertices are transformed into.
+	QModelIndex	iParent = nif->getBlockIndex( nif->getBlockNumber( scene->regionShape ) );
+	if ( !nif->blockInherits( iParent, "NiNode" ) ) {
+		iParent = nif->getBlockIndex( nif->getParent( iParent ) );
+		if ( !( iParent.isValid() && nif->blockInherits( iParent, "NiNode" ) ) ) {
+			QMessageBox::warning( nullptr, "NifSkope",
+				Spell::tr( "This shape has no NiNode parent to attach a collision object to." ) );
+			return index;
+		}
+	}
+
+	float	radius = 0.001f;
+	float	grow = 0.0f;
+	float	precision = 0.25f;
+	if ( !settingsDialog( radius, grow, precision ) )
+		return index;
+
+	// Gather the vertices the selected faces use, in Havok units.  Vertex
+	// indices are collected first so a vertex shared by several selected faces
+	// is only converted once.
+	float	havokScale = spCreateCVS::getHavokScale( nif );
+	if ( !( havokScale > 0.0f ) )
+		return index;
+	const Transform &	trans = s->localTrans( nif->getBlockNumber( iParent ) );
+
+	QSet< quint32 >	vertIds;
+	qsizetype	usedTris = 0;
+	for ( quint32 t : scene->regionTris ) {
+		if ( qsizetype( t ) >= s->triangles.size() )
+			continue;
+		const Triangle &	tri = s->triangles.at( qsizetype( t ) );
+		for ( int e = 0; e < 3; e++ ) {
+			if ( qsizetype( tri[e] ) < s->verts.size() )
+				vertIds.insert( quint32( tri[e] ) );
+		}
+		usedTris++;
+	}
+
+	if ( usedTris < 1 || vertIds.size() < 4 ) {
+		QMessageBox::warning( nullptr, "NifSkope",
+			Spell::tr( "The selection covers %1 faces and %2 vertices. A convex hull needs at least four"
+					   " vertices that are not all in one plane -- paint more of the mesh, or press B to"
+					   " grow the selection." )
+				.arg( usedTris ).arg( vertIds.size() ) );
+		return index;
+	}
+
+	QVector< Vector3 >	meshVerts;
+	meshVerts.reserve( vertIds.size() );
+	for ( quint32 v : vertIds )
+		meshVerts.append( trans * s->verts.at( qsizetype( v ) ) / havokScale );
+
+	QVector< Vector4 >	hullVerts, hullNorms;
+	compute_convex_hull( meshVerts, hullVerts, hullNorms, precision / havokScale );
+
+	// compute_convex_hull returns a triangle soup and one plane per triangle,
+	// so both arrays repeat heavily.  Sorted and uniqued here rather than
+	// through spCreateCVS::SortUnique, which keys a QMap on qHash and so drops
+	// any two entries that happen to collide.
+	auto	sortUnique = []( QVector< Vector4 > & v ) {
+		auto	less = []( const Vector4 & a, const Vector4 & b ) {
+			for ( int i = 0; i < 4; i++ ) {
+				if ( a[i] != b[i] )
+					return a[i] < b[i];
+			}
+			return false;
+		};
+		auto	same = []( const Vector4 & a, const Vector4 & b ) {
+			return ( a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3] );
+		};
+		std::sort( v.begin(), v.end(), less );
+		v.erase( std::unique( v.begin(), v.end(), same ), v.end() );
+	};
+	sortUnique( hullVerts );
+	sortUnique( hullNorms );
+
+	if ( hullVerts.size() < 4 || hullNorms.size() < 4 ) {
+		QMessageBox::warning( nullptr, "NifSkope",
+			Spell::tr( "The selected faces do not enclose a volume, so no hull could be built from them."
+					   " A flat sheet of faces is not enough: a hull needs both sides of the part."
+					   " Press B to grow the selection across to the back faces." ) );
+		return index;
+	}
+
+	// The half-space convention, which is the one detail here that renders
+	// perfectly and fails in the engine if it is wrong.
+	//
+	// `compute_convex_hull` returns qhull's own plane: an outward normal and
+	// `facet->offset`, where inside is n.x + offset <= 0, so offset is MINUS
+	// the support distance.  That is already the convention the file format
+	// uses -- verified against Bethesda's own meshes, where every stored w is
+	// exactly minus the dot product of the normal with the furthest vertex, in
+	// Havok units.  nif.xml says the same.  So the offset is kept as it comes.
+	//
+	// Havok then inflates a convex shape by its radius, so the half spaces are
+	// pulled in by that much to keep the inflated surface where the vertices
+	// are.  Pulling in means a smaller support distance, which in this sign is
+	// a LARGER w.
+	for ( qsizetype i = 0; i < hullNorms.size(); i++ )
+		hullNorms[i][3] = hullNorms[i][3] + radius;
+
+	// Grow: push every face outwards by the same amount, and carry the
+	// vertices with it along the average of the faces they sit on, so the
+	// result still encloses the mesh instead of cutting chords across it.
+	if ( grow > 0.0f ) {
+		// A vertex sits on a plane when its support distance equals that
+		// plane's, and the support distance is -w less the radius the planes
+		// were just pulled in by.
+		QVector< Vector3 >	offs( hullVerts.size() );
+		for ( qsizetype i = 0; i < hullVerts.size(); i++ ) {
+			Vector3	v( hullVerts.at( i ) );
+			Vector3	sum;
+			int	n = 0;
+			for ( const Vector4 & p : hullNorms ) {
+				Vector3	nrm( p );
+				float	d = -( p[3] - radius );
+				if ( std::fabs( Vector3::dotproduct( nrm, v ) - d ) <= 1.0e-4f ) {
+					sum += nrm;
+					n++;
+				}
+			}
+			float	len = sum.length();
+			offs[i] = ( n > 0 && len > 0.0f ? sum / len : Vector3() );
+		}
+		for ( qsizetype i = 0; i < hullVerts.size(); i++ ) {
+			Vector3	v = Vector3( hullVerts.at( i ) ) + ( offs.at( i ) * grow );
+			hullVerts[i] = Vector4( v[0], v[1], v[2], 0.0f );
+		}
+		// Outwards is a greater support distance, so a smaller w.
+		for ( qsizetype i = 0; i < hullNorms.size(); i++ )
+			hullNorms[i][3] = hullNorms[i][3] - grow;
+	}
+
+	QPersistentModelIndex	iCVS = nif->insertNiBlock( "bhkConvexVerticesShape" );
+	if ( !iCVS.isValid() )
+		return index;
+
+	nif->set<uint>( iCVS, "Num Vertices", uint( hullVerts.count() ) );
+	nif->updateArraySize( iCVS, "Vertices" );
+	nif->setArray<Vector4>( iCVS, "Vertices", hullVerts );
+
+	nif->set<uint>( iCVS, "Num Normals", uint( hullNorms.count() ) );
+	nif->updateArraySize( iCVS, "Normals" );
+	nif->setArray<Vector4>( iCVS, "Normals", hullNorms );
+
+	nif->set<float>( iCVS, "Radius", radius );
+
+	// Attach it.  Written out here rather than shared with Create Convex
+	// Shapes: that spell is long, proven and relied on, and refactoring its
+	// write path to share this would risk it for no gain.
+	QModelIndex	collisionLink = nif->getIndex( iParent, "Collision Object" );
+	QModelIndex	collisionObject = nif->getBlockIndex( nif->getLink( collisionLink ) );
+
+	if ( !collisionObject.isValid() ) {
+		collisionObject = nif->insertNiBlock( "bhkCollisionObject" );
+		nif->setLink( collisionLink, nif->getBlockNumber( collisionObject ) );
+		nif->setLink( collisionObject, "Target", nif->getBlockNumber( iParent ) );
+	}
+
+	QModelIndex	rigidBodyLink = nif->getIndex( collisionObject, "Body" );
+	QModelIndex	rigidBody = nif->getBlockIndex( nif->getLink( rigidBodyLink ) );
+
+	if ( !rigidBody.isValid() ) {
+		rigidBody = nif->insertNiBlock( "bhkRigidBody" );
+		nif->setLink( rigidBodyLink, nif->getBlockNumber( rigidBody ) );
+	}
+
+	QPersistentModelIndex	shapeLink = nif->getIndex( rigidBody, "Shape" );
+	QPersistentModelIndex	shape = nif->getBlockIndex( nif->getLink( shapeLink ) );
+
+	// The material is the one already on the weapon, never a default: it is
+	// picked per weapon, and a default here is how a dagger material ends up
+	// on an axe.
+	if ( shape.isValid() ) {
+		NifValue	material = nif->getValue( nif->getIndex( shape, "Material" ) );
+		if ( material.isValid() )
+			nif->setItemValue( nif->getItem( iCVS, "Material" ), material );
+	}
+
+	bool	replace = true;
+	if ( shape.isValid() ) {
+		QVector<qint32>	shapeLinks = { nif->getBlockNumber( shape ) };
+		bool	isListShape = nif->blockInherits( shape, "bhkListShape" );
+
+		QString	title = ( isListShape ? tr( "Add to List Shape" ) : tr( "Create List Shape" ) );
+		QString	body = ( isListShape
+						 ? tr( "This collision object already has a list shape. Add this hull to it?"
+							   " 'No' will replace the list shape." )
+						 : tr( "This collision object already has a shape. Combine into a list shape?"
+							   " 'No' will replace the shape." ) );
+		if ( isListShape )
+			shapeLinks = nif->getLinkArray( shape, "Sub Shapes" );
+
+		if ( QMessageBox::question( nullptr, title, body, QMessageBox::Yes, QMessageBox::No )
+			 == QMessageBox::Yes ) {
+			QModelIndex	iListShape = shape;
+			if ( !isListShape ) {
+				iListShape = nif->insertNiBlock( "bhkListShape" );
+				nif->setLink( shapeLink, nif->getBlockNumber( iListShape ) );
+			}
+
+			shapeLinks << nif->getBlockNumber( iCVS );
+			nif->set<uint>( iListShape, "Num Sub Shapes", uint( shapeLinks.size() ) );
+			nif->updateArraySize( iListShape, "Sub Shapes" );
+			nif->setLinkArray( iListShape, "Sub Shapes", shapeLinks );
+			nif->set<uint>( iListShape, "Num Filters", uint( shapeLinks.size() ) );
+			nif->updateArraySize( iListShape, "Filters" );
+			replace = false;
+		}
+	}
+
+	if ( replace ) {
+		nif->setLink( shapeLink, nif->getBlockNumber( iCVS ) );
+		if ( shape.isValid() )
+			spRemoveBranch().castIfApplicable( nif, shape );
+	}
+
+	// The faces that were just built from are cleared, so a second build does
+	// not silently repeat the same hull.
+	scene->clearRegionSelection();
+
+	Message::append( nullptr, Spell::tr( "Create Convex Shape from Selection" ),
+					 Spell::tr( "Built from %1 faces: %2 vertices, %3 planes." )
+						 .arg( usedTris ).arg( hullVerts.size() ).arg( hullNorms.size() ) );
+
+	return QModelIndex( iCVS );
+}
+
+REGISTER_SPELL( spCVSFromRegion )
 
 
 //! Transforms Havok constraints

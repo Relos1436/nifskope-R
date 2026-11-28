@@ -43,6 +43,8 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QDebug>
 #include <QElapsedTimer>
 
+#include <algorithm>
+
 Shape::Shape( Scene * s, const QModelIndex & b ) : Node( s, b )
 {
 	shapeNumber = s->shapes.count();
@@ -337,6 +339,57 @@ void Shape::drawTriangles( qsizetype i, qsizetype n, FloatVector4 color ) const
 	prog->uni1i( "selectionParam", -1 );
 
 	context->fn->glDrawElements( GL_TRIANGLES, GLsizei( n * 3 ), GL_UNSIGNED_SHORT, (void *) ( i * 6 ) );
+}
+
+// ACP: overlay for the face selection a collision hull is built from.  Drawn
+// from Scene::drawSelection() rather than from this shape's own drawSelection,
+// which only runs for the block that is current in the Block List.
+void Shape::drawRegionSelection( const QSet< quint32 > & tris, FloatVector4 color ) const
+{
+	auto	context = scene->renderer;
+	if ( !context || scene->selecting || tris.isEmpty() || isHidden() )
+		return;
+	if ( !bindShape() )
+		return;
+
+	// Sorted, so a flood-filled region -- which is mostly consecutive indices
+	// -- collapses into a few runs instead of one draw call per triangle.
+	QVector< quint32 >	sorted;
+	sorted.reserve( tris.size() );
+	for ( quint32 t : tris ) {
+		if ( qsizetype( t ) < triangles.size() )
+			sorted.append( t );
+	}
+	if ( sorted.isEmpty() )
+		return;
+	std::sort( sorted.begin(), sorted.end() );
+
+	glDepthFunc( GL_LEQUAL );
+	glEnable( GL_DEPTH_TEST );
+	glDepthMask( GL_FALSE );
+	glDisable( GL_CULL_FACE );
+	glDisable( GL_FRAMEBUFFER_SRGB );
+	glEnable( GL_BLEND );
+	context->fn->glBlendFuncSeparate( GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA, GL_ONE, GL_ONE_MINUS_SRC_ALPHA );
+	// Pulled towards the camera so the shading sits on the surface rather than
+	// fighting it for depth.
+	glEnable( GL_POLYGON_OFFSET_FILL );
+	glPolygonOffset( -1.0f, -2.0f );
+
+	for ( qsizetype i = 0; i < sorted.size(); ) {
+		qsizetype	j = i + 1;
+		while ( j < sorted.size() && sorted.at( j ) == sorted.at( j - 1 ) + 1 )
+			j++;
+		drawTriangles( qsizetype( sorted.at( i ) ), j - i, color );
+		i = j;
+	}
+
+	glDisable( GL_POLYGON_OFFSET_FILL );
+	glDisable( GL_BLEND );
+	glDepthMask( GL_TRUE );
+	// Left as Scene::draw() set it before calling drawSelection, not switched
+	// back on: the per-node overlays drawn after this one expect it off.
+	glDisable( GL_CULL_FACE );
 }
 
 void Shape::drawWeights( int vertexSelected ) const

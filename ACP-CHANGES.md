@@ -3,14 +3,17 @@
 A fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched
 from `develop` at `3797c89` (build of Nov 16 2026).
 
-It adds three things:
+It adds four things:
 
 1. **Havok collision shapes can be edited from the keyboard**, in small exact
    steps, without leaving NifSkope.
 2. **A `bhkCylinderShape` can be baked into a convex hull** from the
    right-click menu, so a cylinder can be used as an editing guide and
    still ship as something the engine supports.
-3. **Three headless command-line operations**, for editing meshes with no
+3. **A region of a mesh can be painted and turned into one hull**, so a blade,
+   a guard and a grip each get their own collision without the mesh being
+   split.
+4. **Three headless command-line operations**, for editing meshes with no
    window open.
 
 Nothing else is changed. No upstream behaviour is removed except one menu
@@ -212,19 +215,42 @@ only the first three components, so W is not part of the shape being
 positioned. It is editable with the W key because the field is there, not
 because it means anything here.
 
-**Half-space convention.** Outward normal, and a *positive* support distance
-with the shell radius subtracted:
+**Half-space convention.** Outward normal, and *minus* the support distance,
+with the shell radius added back because the planes are pulled inward by it:
 
 ```
-w = dot( n, v ) - Radius
+w = -dot( n, v ) + Radius
 ```
 
-This matches `spCreateCVS` (`norms[i][3] = norms[i][3] * -1 - radius`, where
-Qhull's offset is already negated) and `nifcoll_core._planes_from_mesh`
-(`p[3] - r`) in the ACP toolkit. `nif.xml` documents the fourth component as
-"minus the dot product of v and n". **Neither implementation writes it that
-way.** Deriving it from the XML comment produces a hull that looks right in
-NifSkope and is inside out in the engine.
+**ALPHA 11 shipped this with the sign the other way round, and it was wrong.**
+Corrected in ALPHA 12. The reasoning that produced the error is worth keeping,
+because it was not careless:
+
+* `nif.xml` documents the fourth component as "minus the dot product of v and
+  n" — which is correct.
+* Two generators appeared to contradict it and to agree with each other:
+  `spCreateCVS` ends at `norms[i][3] * -1 - radius`, and
+  `nifcoll_core._planes_from_mesh` in the ACP toolkit writes `p[3] - r` over a
+  positive `w = dot(n, v)`. Two implementations against one comment looked
+  decisive.
+* It is not. `spCreateCVS` flips **twice** — `hullPlanes.append( Vector4( n,
+  -hullNorms[i][3] ) )` first turns Qhull's offset into a positive support
+  distance, and the later `* -1` turns it back. Its stored w is negative, as
+  the XML says. Only the toolkit disagrees, and the toolkit is ours.
+* Checked against Bethesda's own meshes in the end, which is what should have
+  happened first: three Creation Club meshes, 112 planes between them, and
+  every stored w was exactly minus the dot product of its normal with the
+  furthest vertex, to five decimals, in Havok units. The format is not
+  ambiguous and never was.
+
+A wrong sign here renders perfectly, because NifSkope draws the shape from its
+vertices and never reads the planes. The engine does read them. **Two
+implementations agreeing with each other is not evidence about a file format —
+the files are.**
+
+The same error is still in `nifcoll_core._planes_from_mesh`, which means every
+hull the ACP toolkit has written carries inverted planes. That is a separate
+decision from this fork and is flagged in the project's own notes.
 
 **The inward shift is guarded.** Havok inflates a convex shape by its radius,
 so the half spaces are pulled in by that much; pulled in further than the shape
@@ -272,6 +298,130 @@ outside the hull, both to within 4.5e-16.
 Worth knowing when choosing `Sides`: a circumscribed ring overshoots the true
 radius by `1/cos(pi/N) - 1`, which is 15.5% at the 6-side minimum, 3.5% at 12,
 2.0% at 16, 0.9% at 24 and 0.1% at 64. Low side counts are a blunt instrument.
+
+## Building collision from part of a mesh
+
+The convex hull of a whole weapon is a slab. It bridges the guard to the blade
+tip and swallows the grip, and every bit of that bridge is collision in empty
+air. No setting fixes it, because the weapon genuinely is not convex — so
+collision for a weapon is always *several* hulls, and the only real question is
+which vertices go in which hull.
+
+Up to now that question was answered numerically, outside NifSkope: spans along
+a solved haft axis, typed in. That works exactly as far as a weapon is a stack
+of cylinders on one axis. A curved blade, an asymmetric axe head, a crossguard
+with swept quillons — the numbers stop describing it, and what the eye can see
+directly has to be estimated instead.
+
+**Render → Select Collision Region** turns the eye back on. Paint over part of
+the mesh, grow the selection to the natural boundary, then right-click the
+shape and choose **Havok → Create Convex Shape from Selection**. One hull, from
+those faces only. The mesh is not split, not reordered, not touched at all.
+
+### Selecting
+
+| action | what it does |
+|---|---|
+| **drag** | paint faces under the brush |
+| **Ctrl + drag** | erase them again |
+| **Shift + drag** | orbit the camera, to paint the other side |
+| **`[`** / **`]`** | brush radius, 1 to 48 screen pixels |
+| **`B`** | grow the selection to the nearest crease |
+| **Shift + `B`** | grow it across the whole connected piece, creases and all |
+| **`,`** / **`.`** | crease angle, 5° to 175°, in 5° steps |
+| **Esc** | clear the selection |
+
+The brush is radius in *screen pixels*, so zooming in gives finer control for
+free, and it is drawn as the mouse cursor — which is the only readout there is,
+since the viewport has no text layer to print one in.
+
+Three selection methods, because no one of them covers every weapon:
+
+* **Grow to island** (Shift+B) spreads across shared edges with no limit. On a
+  mesh where the blade was never welded to the grip this is the whole job in
+  one click, and a surprising number of weapon meshes are built that way.
+* **Grow to crease** (B) stops where the fold between two faces is sharper than
+  the crease angle. That is a guard, a pommel, a ricasso, langets — anything the
+  modeller built as a distinct lump.
+* **The brush** is for everything else, and for cleanup. It is also the answer
+  when a blade merges smoothly into its handle with no edge anywhere to stop at.
+
+### Decisions worth recording
+
+**The selection lives in the Scene, not on the Shape.** Shape objects are
+rebuilt whenever the model changes, so a selection held on one would vanish the
+moment anything was nudged. The shape is identified by a `QPersistentModelIndex`
+rather than a block number, so inserting a block cannot quietly point the
+selection at a different shape.
+
+**One render per brush sample, several discs read out of it.** Picking already
+rasterises the whole viewport into an offscreen image with IDs as colours, and
+reads the one pixel under the cursor. A brush is that same image with more
+pixels read — a disc around the cursor, collecting the unique face IDs in it.
+So there is no ray casting and no unprojecting anywhere in this feature, and
+occlusion is handled for free: a face hidden behind another cannot be painted,
+which is what a brush should do. `indexAt` was split into
+`renderSelectionImage` + `decodeSelectionPixel` + the decode, so both the single
+pick and the brush go through one render path rather than two copies of the GL
+setup.
+
+A fast drag is sampled along its whole length from **one** snapshot of that
+image. Sampling only the end points would leave gaps; re-rendering per sample
+would make the brush crawl. The camera cannot move mid-stroke, so one snapshot
+is good for the whole segment.
+
+**The ID image is rendered with meshes only.** `indexAt` includes collision,
+nodes and furniture markers when those are shown. For the brush that would let
+the collision shape already on the weapon occlude the mesh being painted —
+which is the mesh you are trying to pick.
+
+**Faces touch by position, not by vertex index.** A mesh duplicates vertices
+wherever a UV seam or a shading split runs, so two triangles that visibly share
+an edge frequently share no index at all. Growing on indices alone stops dead
+at an invisible seam down the middle of a blade, so the grow welds vertices by
+position first. Welding is exact rather than tolerance-based: duplicates at a
+seam hold bit-identical positions, and a tolerance would be one more knob to
+get wrong.
+
+**`SelRegion` is set together with `SelObject`.** Region select is a third
+entry in the same exclusive action group as Select Object and Select Vertex, but
+its mode value keeps the `SelObject` bit, so block picking and everything else
+that tests `isSelModeObject()` carries on working. You still need to right-click
+the shape to build the hull.
+
+**Left-drag paints, so Shift-drag orbits.** In region mode Shift+left-drag is
+taken from the light rotation and given to the camera, because painting the far
+side of a blade means turning the model around, and left-drag is no longer free
+to do it.
+
+**Painting one side gives a sliver, by design.** A brush paints what you can
+see, so a hull built from one side of a blade is a flat sheet. The fix is the
+grow keys: adjacency does not care about visibility, so B or Shift+B crosses to
+the back faces. Paint says roughly where; grow makes it solid. The spell says
+so outright when the selection does not enclose a volume.
+
+**Grow, in the build dialog, defaults to 0.** A hull is flat between the
+vertices it was built from, so it cuts slightly inside the mesh — the same
+problem the circumscribed cylinder ring solves, and it matters more here, since
+collision inside the visible weapon is collision the player never feels in VR.
+`Grow` pushes every plane out by a fixed amount and carries the vertices with it
+along the average of the planes they sit on, so planes and vertices move
+together and the hull still bounds itself. The default is 0 because the right
+amount depends on the weapon and is judged against the reference builds; a
+silent nonzero default would quietly inflate every hull.
+
+**The material is copied from the shape already on the weapon**, never
+defaulted, and hulls accumulate: if the collision object already has a
+`bhkListShape` the new hull is added to it, so regions are built one at a time.
+That prompt is upstream's own behaviour, reproduced here rather than shared,
+because `spCreateCVS` is long and relied on and refactoring its write path for
+this would risk it for no gain.
+
+### There is no undo
+
+Same as the cylinder conversion: the spell inserts blocks, and NifSkope's undo
+stack only carries values typed into Block Details. Ctrl+Z will not take a hull
+back. The selection itself is free to redo — Esc and paint again.
 
 ## Headless mode and the three CLI operations
 
@@ -382,11 +532,15 @@ transposes a rotation — no error, just a wrong result.
 
 | file | change |
 |---|---|
-| `src/glview.h` | nudge key enum, step constants, ramp state, `eventFilter` declaration |
-| `src/glview.cpp` | the whole feature: key mapping, event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
+| `src/glview.h` | nudge key enum, step constants, ramp state, `eventFilter` declaration; region brush and grow declarations |
+| `src/glview.cpp` | the whole feature: key mapping, event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook; the region brush, the grow operations, and the ID-image split out of `indexAt` |
+| `src/gl/glscene.h` | `SelRegion`, and the region selection itself (shape, faces, brush radius, crease angle) |
+| `src/gl/glscene.cpp` | clears the selection on load and on leaving the mode; draws the overlay |
+| `src/gl/glshape.h` / `.cpp` | `drawRegionSelection`: the selected faces, as coalesced runs |
 | `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
-| `src/spells/havok.cpp` | `spCylinderToConvexHull`: the cylinder-to-hull right-click spell |
-| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
+| `src/spells/havok.cpp` | `spCylinderToConvexHull`, the cylinder-to-hull spell; `spCVSFromRegion`, the hull-from-selection spell |
+| `src/nifskope_ui.cpp` | the Select Collision Region action, in the same exclusive group as Select Object / Select Vertex |
+| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter`; added `aSelectRegion` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 | `acpbuild.sh` | build helper |
 
@@ -398,7 +552,7 @@ The title bar reads `NifSkope R …` and ends with a marker naming the feature
 set, currently:
 
 ```
-[ACP ALPHA 11 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull]
+[ACP ALPHA 12 - nudge: R radius, L len (Shift/Ctrl one end), L/W/H box, X/Y/Z move + Shift rotate, cylinder X/Y/Z/W per vertex (Shift=A, Alt=B); right-click a cylinder to bake it into a convex hull; Select Collision Region paints faces (drag, Ctrl erase, B grow, [ ] brush size) and builds a hull from them]
 ```
 
 If that marker is absent it is a stock build and none of this works. The marker
@@ -447,6 +601,7 @@ splits targets on whitespace. The space exists only in the window title.
 | ALPHA 9.1 | fixed the camera spinning on after a nudge: claimed arrows no longer share the camera's rotate bits |
 | ALPHA 10 | cylinder `Vertex B` moved from Ctrl to Alt, freeing Cut/Redo/Undo |
 | ALPHA 11 | right-click a `bhkCylinderShape` and bake it into a `bhkConvexVerticesShape` |
+| ALPHA 12 | paint a region of a mesh and build one hull from it: brush, grow to crease, grow to island |
 
 ## Not done
 

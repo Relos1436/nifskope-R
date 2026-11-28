@@ -40,6 +40,7 @@ THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #include <QPersistentModelIndex>
 #include <QVector>
 #include <QString>
+#include <QSet>
 
 //! @file glshape.h Shape
 
@@ -71,6 +72,10 @@ public:
 	void drawWireframe( FloatVector4 color ) const;
 	// i = first triangle, n = number of triangles to draw
 	void drawTriangles( qsizetype i, qsizetype n, FloatVector4 color ) const;
+	//! ACP: shade a set of triangle indices, for the face selection a collision
+	//! hull is built from. Consecutive indices are coalesced into one draw
+	//! call, so a grown region costs a handful of calls, not one per face.
+	void drawRegionSelection( const QSet< quint32 > & tris, FloatVector4 color ) const;
 	void drawWeights( int vertexSelected ) const;
 	void drawBoundingSphere( const BoundSphere & sph, FloatVector4 color ) const;
 	void drawBoundingBox( const Vector3 & boundsCenter, const Vector3 & boundsDims, FloatVector4 color ) const;

@@ -2,10 +2,11 @@
 
 > ### ⚙ NifSkope R — a fork tailored to collision work
 >
-> This build adds two things stock NifSkope cannot do:
+> This build adds three things stock NifSkope cannot do:
 >
 > 1. **Editing Havok collision shapes from the keyboard.** Capsules, cylinders, boxes and transform shapes resized, moved and rotated in exact repeatable steps.
-> 2. **Headless NIF commands** for zeroing an effect shader's emission and removing a named branch — editing meshes with no window open, which is what lets an AI assistant do it for you.
+> 2. **Collision built from part of a mesh.** Paint the blade, or the guard, or the grip, and turn just those faces into a convex hull — without splitting the mesh.
+> 3. **Headless NIF commands** for zeroing an effect shader's emission and removing a named branch — editing meshes with no window open, which is what lets an AI assistant do it for you.
 >
 > Everything else is upstream NifSkope, untouched.
 >
@@ -17,7 +18,7 @@ NifSkope is a tool for opening and editing the NetImmerse file format (NIF). NIF
 
 ## NifSkope R — collision editing and headless NIF commands
 
-**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, a right-click conversion from `bhkCylinderShape` to a convex hull, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
+**This repository is a fork of [fo76utils/nifskope](https://github.com/fo76utils/nifskope), branched from `develop` at `3797c89`.** It adds keyboard editing of Havok collision shapes, a right-click conversion from `bhkCylinderShape` to a convex hull, painting a region of a mesh and building a hull from it, and three headless command-line operations. Everything else below this section is upstream's own README, unchanged.
 
 Branches:
 
@@ -88,12 +89,58 @@ What it does:
 * The ring is **circumscribed**, not inscribed, so every facet sits on or outside the cylinder's surface. The overshoot is `1/cos(π/sides)`: 3.5% at 12 sides, 2.0% at 16, 0.9% at 24. Collision inside the visible weapon is collision the player never feels in VR, so erring outward is the point.
 * The hull is built analytically rather than through Qhull. A cylinder's hull is two regular polygons, so there is nothing for a solver to discover, and the vertex order stays deterministic.
 * `2 × sides` vertices and `sides + 2` half spaces, both written lexicographically sorted as vanilla files have them.
-* Half spaces carry an outward normal and a **positive** support distance, less the shell radius — the convention both `Create Convex Shapes` and the ACP toolkit use. `nif.xml` describes that fourth component as minus the dot product; neither implementation writes it that way.
+* Half spaces carry an outward normal and **minus** the support distance, with the shell radius added back because Havok inflates the shape by it: `w = -dot(n, v) + Radius`. That is what `nif.xml` documents and what Bethesda's own meshes hold — checked against three of them, where every stored w was exactly minus the dot product of its normal with the furthest vertex. **ALPHA 11 wrote this with the opposite sign and was wrong**; fixed in ALPHA 12. A wrong sign there renders perfectly, since NifSkope draws the shape from its vertices and never reads the planes, and is inside out in the engine, which reads them.
 * The **material is copied from the cylinder**, never defaulted. It is a per-weapon choice.
 * Every reference to the cylinder is repointed in a single pass, so a rigid body's `Shape`, a `bhkConvexTransformShape` wrapper and an entry in a `bhkListShape`'s `Sub Shapes` array are all handled without special cases. The surrounding collision hierarchy and transforms are untouched.
 * It refuses rather than writing a broken shape when the cylinder has no length or no radius, or when the collision radius is too large for the shape to survive being shrunk by it.
 
 **There is no undo.** NifSkope's undo stack covers values typed into Block Details, not spells that insert and remove blocks. Close without saving to back out. Conversion is also the last edit you can make to that shape, since the nudge keys cannot move a hull as a unit.
+
+#### Building collision from part of a mesh
+
+The convex hull of a whole weapon is a slab: it bridges the guard to the blade tip and swallows the grip, and every bit of that bridge is collision in empty air. No setting fixes that, because the weapon is not convex — collision for a weapon is always *several* hulls, and the only real question is which faces go in which.
+
+Switch on **Render → Select Collision Region**, paint over the part you want, then **right-click the shape → Havok → Create Convex Shape from Selection**. The mesh is never split: the selection is editor state and the only thing written is the new shape.
+
+| action | what it does |
+|---|---|
+| **drag** | paint faces under the brush |
+| **Ctrl + drag** | erase them again |
+| **Shift + drag** | orbit the camera, to reach the other side |
+| **`[`** / **`]`** | brush radius, 1–48 screen pixels |
+| **`B`** | grow the selection to the nearest crease |
+| **Shift + `B`** | grow across the whole connected piece, creases and all |
+| **`,`** / **`.`** | crease angle, 5°–175° |
+| **Esc** | clear the selection |
+
+The brush radius is in *screen* pixels, so zooming in gives finer control, and the brush is drawn as the mouse cursor. All of these keys only do anything while region select is on.
+
+Three ways to select, because no one of them suits every weapon:
+
+* **Shift + B** spreads across shared edges with no limit and takes the whole connected piece. Where the blade was never welded to the grip — which is a lot of weapon meshes — that is the entire job in one click.
+* **B** stops at folds sharper than the crease angle. That is how you get a guard, a pommel, a ricasso or langets: anything the modeller built as a distinct lump.
+* **The brush** covers everything else, including the blade that merges smoothly into its handle with no edge anywhere to stop at.
+
+A brush paints what you can see, so painting one side of a blade selects one side of a blade, and the hull of that is a flat sliver. **B** and **Shift + B** cross to the back faces, because adjacency does not care about visibility: paint roughly where, then grow to make it solid. The spell tells you plainly if the faces do not enclose a volume.
+
+| setting | default | what it does |
+|---|---|---|
+| **Collision Radius** | 0.001 | the shape's Havok shell, in Havok units |
+| **Grow** | 0.0 | pushes the finished hull outwards, in Havok units |
+| **Precision** | 0.25 | hull simplification tolerance, as in `Create Convex Shapes` |
+
+Remembered between runs under `Spells/Havok/Create Convex Shape from Selection`.
+
+`Grow` exists because a hull is flat between the vertices it was built from and therefore cuts slightly inside the mesh — and collision inside the visible weapon is collision the player never feels in VR. It moves the half spaces and the vertices together, so the hull still bounds itself. It defaults to 0 because the right amount depends on the weapon; a silent nonzero default would quietly inflate every hull you build.
+
+Other things worth knowing:
+
+* Hulls **accumulate**. If the collision object already has a shape you are asked whether to combine into a `bhkListShape`; if it already has one, the new hull is added to it. So blade, guard and grip are built one at a time and end up as sub-shapes of one list.
+* The **material is copied from the shape already on the weapon**, never defaulted.
+* The grow **welds vertices by position** before looking at which faces touch. A mesh duplicates vertices at every UV seam and shading split, so two triangles that visibly share an edge often share no index — growing on indices alone stops dead at an invisible seam down the middle of a blade.
+* Faces hidden behind other faces cannot be painted, which is what a brush should do. Orbit with Shift + drag to reach them.
+
+**There is no undo** for the hull, for the same reason as the cylinder conversion. The selection itself is free: Esc and paint again.
 
 ### Headless mode — editing NIFs with no window open
 
@@ -131,11 +178,14 @@ Upstream's own fourteen cover bounds, tangent spaces, index optimisation, duplic
 
 | file | change |
 |---|---|
-| `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook |
-| `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration |
+| `src/glview.cpp` | the feature: key mapping, application-level event filter, `nudgeWouldClaim`, `nudgeActive`, `nudgeApply`, `nudgeTick`, frame-loop hook; the region brush and the grow operations |
+| `src/glview.h` | key enum, step constants, ramp state, `eventFilter` declaration; region brush and grow declarations |
+| `src/gl/glscene.h` / `.cpp` | the `SelRegion` mode and the face selection it holds |
+| `src/gl/glshape.h` / `.cpp` | `drawRegionSelection`, the overlay for the selected faces |
 | `src/main.cpp` | window title: `NifSkope R` plus a build marker; and the three headless CLI operations |
-| `src/spells/havok.cpp` | `Convert Cylinder to Convex Hull`, the right-click spell that bakes a positioned `bhkCylinderShape` into a `bhkConvexVerticesShape` |
-| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter` |
+| `src/spells/havok.cpp` | `Convert Cylinder to Convex Hull`, the right-click spell that bakes a positioned `bhkCylinderShape` into a `bhkConvexVerticesShape`; `Create Convex Shape from Selection`, which builds one from painted faces |
+| `src/nifskope_ui.cpp` | the Select Collision Region action |
+| `src/ui/nifskope.ui` | removed the bare `Z` shortcut from `aViewCenter`; added `aSelectRegion` |
 | `NifSkope.pro` | `TARGET = NifSkopeR` |
 
 **One upstream behaviour is removed:** bare `Z` no longer triggers View → Center Viewport. The menu item itself still works. `L` and `W` are *not* removed — Left View and camera-forward keep working, and are taken over only while a collision block they can edit is selected.
